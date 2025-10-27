@@ -1,0 +1,10 @@
+# parth-dl has ZERO external dependencies!
+# Uses only Python standard library (urllib, json, re, etc.)
+#
+# This makes it:
+# - More secure (no supply chain attacks)
+# - Easier to install
+# - More maintainable
+# - Faster to deploy
+#
+# Python >= 3.7 required
