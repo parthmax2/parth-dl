@@ -1,48 +1,60 @@
-# parth-dl
 
-**Instagram Media Downloader for Developers** — Download reels, posts, and profile pictures. Public content only. Zero dependencies.
+# ⚡ parth-dl
 
+**Instagram Media Downloader for Developers**  
+📸 Download reels, posts, and profile pictures — public content only, zero dependencies.
+
+[![PyPI](https://img.shields.io/pypi/v/parth-dl.svg)](https://pypi.org/project/parth-dl/)
 [![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code Style](https://img.shields.io/badge/code%20style-clean-black.svg)]()
+[![Downloads](https://static.pepy.tech/personalized-badge/parth-dl?period=total&units=international_system&left_color=grey&right_color=blue&left_text=Downloads)](https://pypi.org/project/parth-dl/)
 
-> Built by [@parthmax_](https://instagram.com/parthmax_) • Zero bloat, pure Python stdlib
+> Built by [@parthmax_](https://instagram.com/parthmax_) • Lightweight • No Auth • No Bloat
 
 ---
 
-## 🔥 Why parth-dl?
+## 🎬 Demo
 
-Most Instagram downloaders are **bloated**, **outdated**, or **require authentication**. This one doesn't.
+<div align="center">
+  <img src="cli.gif" alt="parth-dl CLI demo" width="720px">
+  <p><em>Quickly download reels, posts, or profile pictures — directly from your terminal.</em></p>
+</div>
 
-- ✅ **Reels with audio** — Guaranteed combined streams
-- ✅ **Posts (images/videos)** — Carousel support included
-- ✅ **Profile pictures** — High-resolution extraction
-- ✅ **Zero dependencies** — Pure Python stdlib (no pip hell)
-- ✅ **Rate limiting** — Built-in protection against IP bans
-- ✅ **Retry logic** — Exponential backoff on failures
-- ✅ **Public only** — No login required
+---
+
+## 🚀 Features
+
+- ✅ **Reels with Audio** — Combined audio/video guaranteed  
+- ✅ **Posts (Image/Video)** — Supports carousel posts  
+- ✅ **Profile Pictures** — High-resolution downloads  
+- ✅ **Zero Dependencies** — 100% Python standard library  
+- ✅ **Rate Limiting** — Prevents IP bans  
+- ✅ **Exponential Backoff Retries** — Resilient against transient errors  
+- ✅ **Public-Only Access** — No login or tokens required  
 
 ---
 
 ## ⚡ Installation
 
-### From Source
+### 🔹 From PyPI
+```bash
+pip install parth-dl
+````
+
+### 🔹 From Source
+
 ```bash
 git clone https://github.com/parthmax2/parth-dl.git
 cd parth-dl
 pip install -e .
 ```
 
-### From PyPI (soon)
-```bash
-pip install parth-dl
-```
-
 ---
 
-## 🚀 Usage
+## 🧠 Usage
 
-### CLI
+### 💻 CLI
 
 ```bash
 # Download a reel
@@ -54,7 +66,7 @@ parth-dl https://www.instagram.com/p/ABC123/
 # Download profile picture
 parth-dl https://www.instagram.com/username/
 
-# Custom output
+# Custom output filename
 parth-dl https://www.instagram.com/reel/ABC123/ -o my_video.mp4
 
 # List formats
@@ -64,31 +76,28 @@ parth-dl https://www.instagram.com/reel/ABC123/ --list-formats
 parth-dl https://www.instagram.com/reel/ABC123/ -v
 ```
 
-### Python API
+### 🐍 Python API
 
 ```python
 from parth_dl import InstagramDownloader
 
-# Initialize
 dl = InstagramDownloader(verbose=True)
+dl.download("https://www.instagram.com/reel/ABC123/")
 
-# Download
-dl.download('https://www.instagram.com/reel/ABC123/')
-
-# Get metadata
-info = dl.get_info('https://www.instagram.com/reel/ABC123/')
+info = dl.get_info("https://www.instagram.com/reel/ABC123/")
 print(info)
 ```
 
 **Quick function:**
+
 ```python
 from parth_dl import download
-download('https://www.instagram.com/reel/ABC123/')
+download("https://www.instagram.com/reel/ABC123/")
 ```
 
 ---
 
-## 🛠️ Architecture
+## 🧩 Architecture Overview
 
 ```
 parth-dl/
@@ -96,79 +105,75 @@ parth-dl/
 │   ├── __init__.py      # Package entry + exports
 │   ├── core.py          # Main orchestrator
 │   ├── extractors.py    # API/GraphQL/Embed/Page extractors
-│   ├── utils.py         # Security, retry, rate-limit
+│   ├── utils.py         # Retry logic, rate limiting, URL validation
 │   └── cli.py           # CLI interface
 ├── setup.py
 ├── README.md
 └── requirements.txt     # (Empty — zero deps!)
 ```
 
-**Key Features:**
-- **4 extraction methods** with intelligent fallback
-- **Token bucket rate limiter** (30 req/60s)
-- **Exponential backoff** with jitter
-- **URL validation** to prevent injection
-- **Filename sanitization** for safe I/O
+### ✨ Highlights
+
+* 4-layer extraction system with fallback logic
+* Token bucket rate limiter (30 req / 60s)
+* Exponential backoff with jitter
+* URL and filename sanitization
+* Timeout-safe and injection-proof
 
 ---
 
-## 🔒 Security
+## 🔒 Security First
 
-- **No external dependencies** → No supply chain attacks
-- **URL validation** → Prevents injection
-- **Rate limiting** → Avoids IP bans
-- **Retry logic** → Handles transient failures
-- **Timeout controls** → No hanging requests
+* No third-party dependencies → No supply chain attacks
+* Secure URL validation & sanitization
+* Built-in rate limiting and retry control
+* Strict timeout and error handling
 
 ---
 
 ## ⚠️ Disclaimer
 
 **For educational and personal use only.**
+This project may violate Instagram’s Terms of Service. You are solely responsible for:
 
-This tool may violate Instagram's Terms of Service. By using it, you accept full responsibility for:
-- Compliance with Instagram ToS
-- Copyright and intellectual property laws
-- Ethical usage
-
-Only download content you have permission to use. Respect creators' rights.
+* Compliance with ToS
+* Respecting copyright laws
+* Ethical, non-commercial usage
 
 ---
 
 ## 🤝 Contributing
 
-PRs welcome! Follow these steps:
+Contributions welcome!
 
-1. Fork the repo
-2. Create a feature branch (`git checkout -b feature/xyz`)
-3. Commit changes (`git commit -m 'Add xyz'`)
-4. Push to branch (`git push origin feature/xyz`)
-5. Open a PR
+1. Fork the repository
+2. Create a new branch (`feature/awesome-idea`)
+3. Commit your changes
+4. Push & open a Pull Request
 
 ---
 
 ## 📝 License
 
-MIT License — See [LICENSE](LICENSE) for details.
-
-**Provided "as is" without warranty.** Instagram may change APIs anytime. Not responsible for misuse.
+**MIT License** — See [LICENSE](LICENSE) for details.
+Provided *“as is”* without warranty. Not responsible for misuse.
 
 ---
 
-## 📬 Connect
+## 👤 Author
 
-- **Author:** Saksham Pathak (Parthmax)
-- **Instagram:** [@parthmax_](https://instagram.com/parthmax_)
-- **LinkedIn:** [Saksham Pathak](https://linkedin.com/in/sakshampathak)
-- **Hugging Face:** [parthmax](https://huggingface.co/parthmax)
-- **Email:** pathaksaksham430@gmail.com
+**Saksham Pathak (Parthmax)**
+
+* 📷 [Instagram](https://instagram.com/parthmax_)
+* 💼 [LinkedIn](https://linkedin.com/in/sakshampathak)
+* 🤗 [Hugging Face](https://huggingface.co/parthmax)
+* ✉️ [Email](mailto:pathaksaksham430@gmail.com)
 
 ---
 
 <div align="center">
-  
-**Built with ❤️ by Parthmax**
 
-[⭐ Star this repo](https://github.com/parthmax2/parth-dl) if you found it useful!
+💡 *Built with ❤️ by Parthmax*
+⭐ [Star the repo](https://github.com/parthmax2/parth-dl) if you love it!
 
 </div>
