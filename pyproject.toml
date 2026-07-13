@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "parth-dl"
+dynamic = ["version"]
+description = "Fast and developer-friendly Instagram media downloader — CLI, Python API, and local web UI. Download reels, posts, and profile pictures with zero dependencies."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Saksham Pathak (Parthmax)", email = "pathaksaksham430@gmail.com" },
+]
+keywords = [
+    "instagram-downloader", "instagram-reels", "reels-downloader", "insta-downloader",
+    "instagram-cli", "python-cli", "parth-dl", "parthmax", "saksham-pathak",
+    "media-downloader", "instagram-scraper", "reels-scraper", "developer-tools",
+    "open-source-cli", "fast-instagram-downloader",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+# No runtime dependencies - pure standard library.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff"]
+
+[project.scripts]
+parth-dl = "parth_dl.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/parthmax2/parth-dl"
+Documentation = "https://parthmax2.github.io/parth-dl/"
+Source = "https://github.com/parthmax2/parth-dl"
+Issues = "https://github.com/parthmax2/parth-dl/issues"
+Changelog = "https://github.com/parthmax2/parth-dl/blob/main/CHANGELOG.md"
+Author = "https://parthmax.in/"
+
+[tool.setuptools.dynamic]
+version = { attr = "parth_dl.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["parth_dl*"]
+
+[tool.setuptools.package-data]
+parth_dl = ["web/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "B904",  # raise ... from err - the chained context is noise in CLI error paths
+    "UP031", # %-format - not used, but keeps 3.8 compat rewrites off
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The browser User-Agent string is a single unwrappable token
+"parth_dl/extractors.py" = ["E501"]

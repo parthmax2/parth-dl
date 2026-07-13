@@ -16,6 +16,12 @@ dist/
 .vscode/
 .idea/
 
+# Interrupted downloads
+*.part
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Web UI downloads (parth-dl serve)
+downloads/

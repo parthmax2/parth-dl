@@ -1,9 +1,10 @@
 # Include documentation
 include README.md
 include LICENSE
+include CHANGELOG.md
 
-# Include requirements (even though empty)
-include requirements.txt
+# Web UI served by `parth-dl serve`
+recursive-include parth_dl/web *.html
 
 # Exclude unnecessary files
 global-exclude __pycache__

@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="loading">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>parth-dl — Instagram Reels, Posts &amp; Profile Picture Downloader (Python CLI)</title>
+<meta name="description" content="parth-dl is a fast, zero-dependency Instagram downloader for reels, posts, carousels and profile pictures. Use it as a Python CLI, a Python library, or a local JSON API. Open source, MIT licensed, built by Saksham Pathak (Parthmax).">
+<meta name="author" content="Saksham Pathak">
+<link rel="canonical" href="https://parthmax2.github.io/parth-dl/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="parth-dl">
+<meta property="og:title" content="parth-dl — Instagram Downloader CLI, Library &amp; Web UI">
+<meta property="og:description" content="Download Instagram reels, posts and profile pictures from your terminal, your Python code, or any app over HTTP. Zero dependencies, MIT licensed.">
+<meta property="og:url" content="https://parthmax2.github.io/parth-dl/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="parth-dl — Instagram Downloader CLI, Library &amp; Web UI">
+<meta name="twitter:description" content="Download Instagram reels, posts and profile pictures from your terminal, your Python code, or any app over HTTP.">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "name": "parth-dl",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Windows, macOS, Linux",
+      "description": "A fast, zero-dependency Instagram media downloader for reels, posts, carousels and profile pictures. Available as a command-line tool, a Python library, and a local HTTP JSON API.",
+      "url": "https://parthmax2.github.io/parth-dl/",
+      "downloadUrl": "https://pypi.org/project/parth-dl/",
+      "codeRepository": "https://github.com/parthmax2/parth-dl",
+      "programmingLanguage": "Python",
+      "license": "https://opensource.org/licenses/MIT",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "author": { "@id": "https://parthmax.in/#saksham-pathak" }
+    },
+    {
+      "@type": "Person",
+      "@id": "https://parthmax.in/#saksham-pathak",
+      "name": "Saksham Pathak",
+      "alternateName": "Parthmax",
+      "jobTitle": "Generative AI Engineer",
+      "description": "Generative AI engineer and open-source developer. M.Sc. in AI & Machine Learning, IIIT Lucknow.",
+      "url": "https://parthmax.in/",
+      "sameAs": [
+        "https://github.com/parthmax2",
+        "https://in.linkedin.com/in/sakshampathak",
+        "https://huggingface.co/parthmax",
+        "https://instagram.com/parthmax_"
+      ]
+    }
+  ]
+}
+</script>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --bg: #08080c;
+    --panel: #101018;
+    --panel-2: #16161f;
+    --line: #24242f;
+    --text: #e8e8f2;
+    --muted: #8b8ba3;
+    --accent: #00e5a0;
+    --accent-dim: #00e5a01a;
+    --violet: #7c5cff;
+    --danger: #ff5c72;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+  }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  /* Ambient glow, the one flourish - fixed so it never causes scroll */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: -30% -10% auto -10%;
+    height: 60vh;
+    background: radial-gradient(60% 60% at 50% 40%, #00e5a022, transparent 70%),
+                radial-gradient(40% 50% at 80% 30%, #7c5cff1f, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .wrap { position: relative; z-index: 1; max-width: 940px; margin: 0 auto; padding: 0 20px; }
+
+  /* ---- header ---- */
+  header { display: flex; align-items: center; gap: 16px; padding: 22px 0; flex-wrap: wrap; }
+  .brand { display: flex; align-items: baseline; gap: 10px; font-family: var(--mono); font-size: 20px; font-weight: 600; }
+  .brand .bolt { color: var(--accent); }
+  .brand .ver { font-size: 12px; color: var(--muted); }
+  nav { margin-left: auto; display: flex; gap: 18px; flex-wrap: wrap; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 14px; }
+  nav a:hover { color: var(--accent); }
+
+  /* ---- hero ---- */
+  .hero { padding: 40px 0 28px; }
+  h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.15; margin: 0 0 14px; letter-spacing: -0.02em; }
+  h1 .grad {
+    background: linear-gradient(100deg, var(--accent), var(--violet));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lede { color: var(--muted); font-size: 18px; max-width: 620px; margin: 0; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  .pill {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px;
+  }
+
+  /* ---- status banner ---- */
+  .status { display: flex; align-items: center; gap: 10px; font-size: 13px; font-family: var(--mono);
+            border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 20px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .live .dot { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .live { border-color: #00e5a044; background: var(--accent-dim); }
+  .offline .dot { background: var(--muted); }
+  .status code { color: var(--accent); }
+
+  /* ---- app ---- */
+  .composer { display: flex; gap: 10px; flex-wrap: wrap; }
+  input[type=url], select, button { font: inherit; }
+  input[type=url] {
+    flex: 1 1 320px; min-width: 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--text); padding: 13px 16px; font-family: var(--mono); font-size: 14px;
+  }
+  input[type=url]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  select {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--text); padding: 13px 12px; font-size: 14px;
+  }
+  button {
+    background: var(--accent); color: #04150f; border: 0; border-radius: 10px;
+    padding: 13px 22px; font-weight: 650; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { color: var(--muted); font-size: 13px; margin: 10px 2px 0; }
+
+  /* ---- queue ---- */
+  #queue { margin: 26px 0 40px; display: flex; flex-direction: column; gap: 12px; }
+  .job {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+    padding: 14px 16px; display: flex; gap: 14px; align-items: flex-start;
+  }
+  .thumb {
+    width: 64px; height: 64px; border-radius: 8px; object-fit: cover; flex: none;
+    background: var(--panel-2); border: 1px solid var(--line);
+  }
+  .job-body { flex: 1; min-width: 0; }
+  .job-title { font-weight: 600; margin: 0 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job-meta { color: var(--muted); font-size: 13px; font-family: var(--mono); margin: 0; }
+  .job-meta .err { color: var(--danger); }
+  .bar { height: 6px; border-radius: 999px; background: var(--panel-2); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--violet)); transition: width .25s; }
+  .bar.indeterminate > i { width: 35%; animation: slide 1.1s ease-in-out infinite; }
+  @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  .files { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .files a { color: var(--accent); font-family: var(--mono); font-size: 13px; text-decoration: none; }
+  .files a:hover { text-decoration: underline; }
+
+  /* ---- landing ---- */
+  .term {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    font-family: var(--mono); font-size: 13.5px; overflow: hidden; margin: 26px 0;
+  }
+  .term-bar { display: flex; gap: 6px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--line); }
+  .term pre { margin: 0; padding: 16px; overflow-x: auto; line-height: 1.75; }
+  .term .c { color: var(--accent); }
+  .term .d { color: var(--muted); }
+  .term .v { color: var(--violet); }
+
+  .copy-row { display: flex; gap: 10px; align-items: stretch; margin: 22px 0; flex-wrap: wrap; }
+  .copy-row code {
+    flex: 1 1 260px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 13px 16px; font-family: var(--mono); color: var(--accent);
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 22px 0 40px; }
+  .card { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 18px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  h2 { font-size: 22px; margin: 44px 0 6px; letter-spacing: -0.01em; }
+  h2 + p.sub { color: var(--muted); margin: 0 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 18px 0; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  td code { font-family: var(--mono); color: var(--accent); font-size: 13px; }
+  .scroll-x { overflow-x: auto; }
+
+  footer { border-top: 1px solid var(--line); margin-top: 50px; padding: 26px 0 40px; color: var(--muted); font-size: 14px; }
+  footer a { color: var(--text); text-decoration: none; }
+  footer a:hover { color: var(--accent); }
+  .disclaimer { font-size: 13px; margin-top: 14px; }
+
+  /* ---- mode switching ---- */
+  [data-mode="loading"] .live-only, [data-mode="loading"] .landing-only { display: none; }
+  [data-mode="live"] .landing-only { display: none; }
+  [data-mode="landing"] .live-only { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand"><span class="bolt">⚡</span> parth-dl <span class="ver" id="ver"></span></div>
+  <nav>
+    <a href="https://github.com/parthmax2/parth-dl">GitHub</a>
+    <a href="https://pypi.org/project/parth-dl/">PyPI</a>
+    <a href="https://github.com/parthmax2/parth-dl/tree/main/docs">Docs</a>
+    <a href="https://parthmax.in/">parthmax.in</a>
+  </nav>
+</header>
+
+<main>
+<section class="hero">
+  <h1>Download Instagram media<br><span class="grad">from anywhere you build.</span></h1>
+  <p class="lede">
+    Reels, posts, carousels and profile pictures — through a terminal, a Python import,
+    or an HTTP call from any language. Zero dependencies, public content only.
+  </p>
+  <div class="pills">
+    <span class="pill">zero dependencies</span>
+    <span class="pill">resumable</span>
+    <span class="pill">MIT</span>
+    <span class="pill">python 3.8+</span>
+  </div>
+</section>
+
+<!-- ============ LIVE MODE: the working app ============ -->
+<div class="live-only">
+  <div class="status live">
+    <span class="dot"></span>
+    <span>Connected to your local parth-dl server. Paste a link and it downloads to <code id="dldir">./downloads</code>.</span>
+  </div>
+
+  <form class="composer" id="composer">
+    <input type="url" id="url" placeholder="https://www.instagram.com/reel/..." required autocomplete="off" autofocus>
+    <select id="quality" aria-label="Quality">
+      <option value="best">Best quality</option>
+      <option value="worst">Smallest file</option>
+    </select>
+    <button type="submit">Download</button>
+  </form>
+  <p class="hint">Paste the next link any time — downloads queue up and keep running.</p>
+
+  <div id="queue"></div>
+</div>
+
+<!-- ============ LANDING MODE: static page ============ -->
+<div class="landing-only">
+  <div class="status offline">
+    <span class="dot"></span>
+    <span>Want this page to actually download? Install parth-dl and run <code>parth-dl serve</code>.</span>
+  </div>
+
+  <div class="copy-row">
+    <code>pip install parth-dl</code>
+    <button type="button" id="copy">Copy</button>
+  </div>
+
+  <div class="term">
+    <div class="term-bar"><i></i><i></i><i></i></div>
+    <pre><span class="d">$</span> <span class="c">parth-dl</span> https://www.instagram.com/reel/ABC123/
+
+Title: Sunrise over Lucknow
+Uploader: @parthmax_
+Type: video
+
+parthmax_-ABC123.mp4
+Audio: <span class="c">✓</span> YES
+Downloading: |<span class="c">████████████████████████████████████████</span>| 100.0% 4.21 MB/4.21 MB
+Resolution: 720x1280
+
+<span class="c">✓</span> Download complete!
+Files saved: 1
+  - <span class="v">parthmax_-ABC123.mp4</span>   <span class="d">← clickable, opens in your player</span></pre>
+  </div>
+
+  <h2>Three ways to use it</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Command line</h3>
+      <p>Single URLs, batch files, carousels, <code>--json</code> for scripting, and typed exit codes you can branch on.</p>
+    </div>
+    <div class="card">
+      <h3>Python library</h3>
+      <p><code>from parth_dl import download, get_info</code> — a documented dict contract for building bots and pipelines.</p>
+    </div>
+    <div class="card">
+      <h3>HTTP / any language</h3>
+      <p><code>parth-dl serve</code> exposes a local JSON API, so Node, Go, PHP or a browser can drive it.</p>
+    </div>
+  </div>
+
+  <h2>The JSON API</h2>
+  <p class="sub">Started with <code>parth-dl serve</code>. Bound to loopback — it is your machine only.</p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Endpoint</th><th>Does</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /api/health</code></td><td>Liveness + version</td></tr>
+      <tr><td><code>POST /api/info</code></td><td>Metadata for a URL, no download</td></tr>
+      <tr><td><code>POST /api/download</code></td><td>Starts a job, returns a <code>job_id</code></td></tr>
+      <tr><td><code>GET /api/jobs/{id}</code></td><td>Progress, then the saved files</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Built by Saksham Pathak</h2>
+  <p class="sub">
+    Generative AI engineer, M.Sc. AI &amp; ML at IIIT Lucknow. parth-dl is one of a set of
+    open developer tools — see the <a href="https://parthmax.in/" style="color:var(--accent)">creator-to-engineer journey</a>
+    and the rest of the work at <a href="https://parthmax.in/" style="color:var(--accent)">parthmax.in</a>.
+  </p>
+</div>
+</main>
+
+<footer>
+  <div>
+    <a href="https://github.com/parthmax2/parth-dl">GitHub</a> ·
+    <a href="https://pypi.org/project/parth-dl/">PyPI</a> ·
+    <a href="https://parthmax.in/">parthmax.in</a> ·
+    <a href="https://in.linkedin.com/in/sakshampathak">LinkedIn</a> ·
+    <a href="https://huggingface.co/parthmax">Hugging Face</a>
+  </div>
+  <p class="disclaimer">
+    MIT licensed. Public content only — no login, no tokens. You are responsible for
+    complying with Instagram's Terms of Service and applicable law.
+  </p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  const root = document.documentElement;
+
+  // The one file serves two purposes: when a parth-dl server answers, this is a
+  // working downloader; when it is opened as a static page (GitHub Pages), it is
+  // the project's landing page. Probe once, then commit to a mode.
+  fetch('api/health', { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(info => {
+      root.dataset.mode = 'live';
+      document.getElementById('ver').textContent = 'v' + info.version;
+      initApp();
+    })
+    .catch(() => { root.dataset.mode = 'landing'; initLanding(); });
+
+  function initLanding() {
+    const btn = document.getElementById('copy');
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText('pip install parth-dl').then(() => {
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      });
+    });
+  }
+
+  function initApp() {
+    const form = document.getElementById('composer');
+    const urlInput = document.getElementById('url');
+    const quality = document.getElementById('quality');
+    const queue = document.getElementById('queue');
+
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      const url = urlInput.value.trim();
+      if (!url) return;
+      urlInput.value = '';        // ready for the next one immediately
+      start(url, quality.value);
+    });
+
+    function start(url, q) {
+      const job = renderJob(url);
+      queue.prepend(job.el);
+
+      post('api/info', { url })
+        .then(info => {
+          job.describe(info);
+          return post('api/download', { url, quality: q });
+        })
+        .then(res => poll(res.job_id, job))
+        .catch(err => job.fail(err.message));
+    }
+
+    function poll(id, job) {
+      fetch('api/jobs/' + id)
+        .then(r => r.json())
+        .then(j => {
+          if (j.state === 'running') {
+            job.progress(j.percent);
+            return setTimeout(() => poll(id, job), 400);
+          }
+          if (j.state === 'error') return job.fail(j.error);
+          job.done(j.files);
+        })
+        .catch(err => job.fail(err.message));
+    }
+  }
+
+  function post(path, body) {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(async r => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+      return data;
+    });
+  }
+
+  function renderJob(url) {
+    const el = document.createElement('article');
+    el.className = 'job';
+    el.innerHTML = `
+      <img class="thumb" alt="" referrerpolicy="no-referrer" hidden>
+      <div class="job-body">
+        <p class="job-title"></p>
+        <p class="job-meta">Fetching metadata…</p>
+        <div class="bar indeterminate"><i></i></div>
+        <ul class="files"></ul>
+      </div>`;
+
+    const thumb = el.querySelector('.thumb');
+    const title = el.querySelector('.job-title');
+    const meta = el.querySelector('.job-meta');
+    const bar = el.querySelector('.bar');
+    const fill = el.querySelector('.bar > i');
+    const files = el.querySelector('.files');
+
+    title.textContent = url;
+
+    return {
+      el,
+      describe(info) {
+        title.textContent = info.title || 'Untitled';
+        const items = (info.entries || []).length;
+        meta.textContent = `@${info.uploader} · ${info.type}` + (items > 1 ? ` · ${items} items` : '');
+        if (info.thumbnail) {
+          thumb.src = info.thumbnail;
+          thumb.hidden = false;
+          thumb.onerror = () => { thumb.hidden = true; };   // CDN may refuse hotlinks
+        }
+      },
+      progress(percent) {
+        // -1 means the CDN sent no Content-Length: keep the bar indeterminate
+        if (percent < 0) return;
+        bar.classList.remove('indeterminate');
+        fill.style.width = percent + '%';
+      },
+      done(saved) {
+        bar.classList.remove('indeterminate');
+        fill.style.width = '100%';
+        meta.textContent = `Saved ${saved.length} file${saved.length === 1 ? '' : 's'}`;
+        saved.forEach(f => {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = f.url;
+          a.textContent = '↓ ' + f.name;
+          a.setAttribute('download', f.name);
+          li.appendChild(a);
+          files.appendChild(li);
+        });
+      },
+      fail(message) {
+        bar.remove();
+        meta.innerHTML = '';
+        const span = document.createElement('span');
+        span.className = 'err';
+        span.textContent = message || 'Download failed';
+        meta.appendChild(span);
+      }
+    };
+  }
+})();
+</script>
+</body>
+</html>

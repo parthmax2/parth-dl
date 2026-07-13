@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.8', '3.11', '3.13']
+        exclude:
+          # 3.8 is unavailable on the arm64 macOS runners
+          - os: macos-latest
+            python-version: '3.8'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff
+      - run: ruff check parth_dl tests
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+
+      - name: Web UI must be shipped in the wheel
+        run: python -m zipfile -l dist/*.whl | grep -q 'parth_dl/web/index.html'
+
+      - name: docs/index.html must stay in sync with the served UI
+        run: diff parth_dl/web/index.html docs/index.html
