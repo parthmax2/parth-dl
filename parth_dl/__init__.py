@@ -6,7 +6,7 @@ Author: Saksham Pathak (Parthmax)
 License: MIT
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "Saksham Pathak (Parthmax)"
 __description__ = "Instagram media downloader for public content"
 

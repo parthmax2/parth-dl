@@ -2,8 +2,10 @@
 
 import io
 import unittest
+import urllib.request
 from unittest import mock
 
+from parth_dl.core import ValidatingRedirectHandler
 from parth_dl.utils import (
     ValidationError,
     extract_instagram_id,
@@ -17,6 +19,7 @@ from parth_dl.utils import (
     read_mp4_dimensions,
     sanitize_filename,
     select_format,
+    style,
     validate_media_url,
     validate_url,
 )
@@ -46,6 +49,25 @@ class TestUrlParsing(unittest.TestCase):
         self.assertTrue(is_media_url(url))
         self.assertFalse(is_profile_url(url))
 
+    def test_url_routing_is_case_insensitive(self):
+        url = 'https://INSTAGRAM.COM/ReEl/ABC123/'
+        validate_url(url)
+
+        self.assertTrue(is_media_url(url))
+
+    def test_stories_are_not_misrouted_as_posts(self):
+        url = 'https://www.instagram.com/stories/someone/123456/'
+        validate_url(url)
+
+        self.assertFalse(is_media_url(url))
+        self.assertFalse(is_profile_url(url))
+
+    def test_profile_url_may_have_a_fragment(self):
+        self.assertEqual(
+            extract_username('https://www.instagram.com/some.user/#profile'),
+            'some.user',
+        )
+
     def test_validate_url_rejects_other_hosts(self):
         for bad in ['', 'not a url', 'https://evil.com/p/ABC/', 'javascript:alert(1)']:
             with self.assertRaises(ValidationError):
@@ -63,6 +85,16 @@ class TestUrlParsing(unittest.TestCase):
         ]:
             with self.assertRaises(ValidationError, msg=bad):
                 validate_media_url(bad)
+
+    def test_redirect_destination_is_revalidated(self):
+        handler = ValidatingRedirectHandler()
+        request = urllib.request.Request('https://scontent.cdninstagram.com/x.mp4')
+
+        with self.assertRaises(ValidationError):
+            handler.redirect_request(
+                request, None, 302, 'Found', {},
+                'http://127.0.0.1/private',
+            )
 
 
 class TestFilenames(unittest.TestCase):
@@ -222,6 +254,14 @@ class TestHyperlinks(unittest.TestCase):
 
         self.assertTrue(uri.startswith('file:///'))
         self.assertTrue(uri.endswith('out.mp4'))
+
+    def test_no_color_disables_ansi_styling(self):
+        stream = self.stream(True)
+        with mock.patch.dict('os.environ', {'NO_COLOR': '1'}, clear=False):
+            self.assertEqual(style('done', 'green', stream=stream), 'done')
+
+    def test_non_tty_never_gets_ansi_styling(self):
+        self.assertEqual(style('done', 'green', stream=self.stream(False)), 'done')
 
 
 if __name__ == '__main__':

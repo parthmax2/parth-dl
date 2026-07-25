@@ -6,11 +6,12 @@ shape Instagram's API, GraphQL and embed endpoints happen to return - so the
 response shapes are pinned here as fixtures rather than fetched over the network.
 """
 
+import json
 import unittest
 from unittest import mock
 
 from parth_dl.extractors import BaseExtractor, MediaExtractor, ProfilePictureExtractor
-from parth_dl.utils import DownloadError
+from parth_dl.utils import DownloadError, NetworkError, RateLimitError
 
 
 def api_video_item():
@@ -101,6 +102,21 @@ class ShortcodeTest(unittest.TestCase):
         with self.assertRaises(DownloadError):
             self.extractor._shortcode_to_mediaid('AB!123')
 
+    def test_every_http_request_uses_the_shared_rate_limiter(self):
+        limiter = mock.Mock()
+        extractor = BaseExtractor(rate_limiter=limiter)
+        response = mock.Mock()
+        response.read.return_value = b'{}'
+        response.headers = {}
+        extractor.opener.open = mock.Mock(return_value=response)
+
+        extractor._make_request('https://www.instagram.com/p/ABC/')
+
+        limiter.wait_if_needed.assert_called_once_with()
+
+    def test_only_supported_standard_library_encoding_is_advertised(self):
+        self.assertEqual(BaseExtractor.BASE_HEADERS['Accept-Encoding'], 'gzip')
+
 
 class ParseApiItemTest(unittest.TestCase):
 
@@ -165,6 +181,107 @@ class ParseGraphqlTest(unittest.TestCase):
         self.assertEqual(info['type'], 'carousel')
         self.assertEqual([e['kind'] for e in info['entries']], ['image', 'video'])
 
+    def test_video_cover_is_not_misreported_as_downloadable_media(self):
+        media = graphql_media()
+        media.pop('video_url')
+
+        info = self.extractor._parse_graphql_media(media)
+
+        self.assertEqual(info['type'], 'video')
+        self.assertEqual(info['entries'], [])
+        self.assertEqual(info['images'], [])
+
+
+class PolarisGraphqlTest(unittest.TestCase):
+
+    def setUp(self):
+        self.extractor = MediaExtractor()
+
+    @staticmethod
+    def product():
+        return {
+            'pk': '3925150418023071712',
+            'code': 'DZ474JEPb_g',
+            'media_type': 2,
+            'product_type': 'clips',
+            'has_audio': True,
+            'caption': {'text': 'Anonymous reel'},
+            'user': {'username': 'creator'},
+            'video_versions': [
+                {'type': 101, 'url': 'https://cdn.example/video.mp4'},
+                {'type': 102, 'url': 'https://cdn.example/video.mp4'},
+            ],
+            'image_versions2': {
+                'candidates': [{'url': 'https://cdn.example/cover.jpg'}],
+            },
+        }
+
+    def test_logged_out_query_returns_combined_video(self):
+        response = {
+            'data': {
+                'xig_polaris_media': {
+                    'if_not_gated_logged_out': self.product(),
+                },
+            },
+        }
+        with mock.patch.object(
+            type(self.extractor), 'cookies',
+            new_callable=mock.PropertyMock,
+            return_value={'csrftoken': 'csrf-token'},
+        ), mock.patch.object(
+            self.extractor, '_make_request',
+            side_effect=[
+                '["LSD",[],{"token":"lsd-token"}',
+                '{"status":"ok"}',
+                json.dumps(response),
+            ],
+        ) as request:
+            info = self.extractor._extract_from_polaris('DZ474JEPb_g')
+
+        self.assertEqual(info['id'], 'DZ474JEPb_g')
+        self.assertEqual(info['uploader'], 'creator')
+        self.assertEqual(len(info['entries']), 1)
+        # Instagram repeats the same progressive URL under multiple type IDs.
+        self.assertEqual(len(info['entries'][0]['formats']), 1)
+        self.assertTrue(info['entries'][0]['formats'][0]['has_audio'])
+
+        graphql_call = request.call_args_list[2]
+        self.assertEqual(
+            graphql_call.args[0], 'https://www.instagram.com/api/graphql',
+        )
+        self.assertEqual(graphql_call.kwargs['headers']['X-FB-LSD'], 'lsd-token')
+        self.assertEqual(
+            graphql_call.kwargs['data']['doc_id'],
+            MediaExtractor.LOGGED_OUT_QUERY_DOC_ID,
+        )
+
+    def test_missing_lsd_token_stops_before_graphql(self):
+        with mock.patch.object(
+            self.extractor, '_make_request', return_value='<html></html>',
+        ) as request:
+            self.assertIsNone(
+                self.extractor._extract_from_polaris('DZ474JEPb_g'),
+            )
+
+        request.assert_called_once_with('https://www.instagram.com/')
+
+    def test_gated_response_is_not_treated_as_downloadable(self):
+        with mock.patch.object(
+            type(self.extractor), 'cookies',
+            new_callable=mock.PropertyMock,
+            return_value={'csrftoken': 'csrf-token'},
+        ), mock.patch.object(
+            self.extractor, '_make_request',
+            side_effect=[
+                '["LSD",[],{"token":"lsd-token"}',
+                '{"status":"ok"}',
+                '{"data":{"xig_polaris_media":{"if_not_gated_logged_out":null}}}',
+            ],
+        ):
+            self.assertIsNone(
+                self.extractor._extract_from_polaris('DZ474JEPb_g'),
+            )
+
 
 class FallbackChainTest(unittest.TestCase):
     """
@@ -204,6 +321,28 @@ class FallbackChainTest(unittest.TestCase):
              mock.patch.object(self.extractor, '_extract_from_embed', return_value=None):
 
             with self.assertRaises(DownloadError):
+                self.extractor.extract('https://www.instagram.com/p/Cxyz123AbCd/')
+
+    def test_rate_limit_is_preserved_after_fallbacks_fail(self):
+        with mock.patch.object(
+            self.extractor, '_extract_from_embed', side_effect=RateLimitError('429'),
+        ), mock.patch.object(
+            self.extractor, '_extract_from_graphql', return_value=None,
+        ), mock.patch.object(
+            self.extractor, '_extract_from_api', return_value=None,
+        ):
+            with self.assertRaises(RateLimitError):
+                self.extractor.extract('https://www.instagram.com/p/Cxyz123AbCd/')
+
+    def test_network_error_is_preserved_after_fallbacks_fail(self):
+        with mock.patch.object(
+            self.extractor, '_extract_from_embed', side_effect=NetworkError('offline'),
+        ), mock.patch.object(
+            self.extractor, '_extract_from_graphql', return_value=None,
+        ), mock.patch.object(
+            self.extractor, '_extract_from_api', return_value=None,
+        ):
+            with self.assertRaises(NetworkError):
                 self.extractor.extract('https://www.instagram.com/p/Cxyz123AbCd/')
 
     def test_a_method_returning_no_entries_is_not_accepted(self):

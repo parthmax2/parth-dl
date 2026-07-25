@@ -51,7 +51,7 @@ sorts by pixel area and copes with the `null` dimensions.
 {
   "id": "Cxyz123AbCd",
   "title": "sunrise over lucknow",
-  "uploader": "parthmax_",
+  "uploader": "parthmax",
   "type": "video",
   "duration": 12.5,
   "thumbnail": "https://scontent.cdninstagram.com/.../thumb.jpg",
@@ -80,7 +80,7 @@ sorts by pixel area and copes with the `null` dimensions.
 {
   "id": "Cxyz123AbCd",
   "type": "carousel",
-  "uploader": "parthmax_",
+  "uploader": "parthmax",
   "entries": [
     { "kind": "image", "formats": [ { "url": "...", "width": 1080, "height": 1080, "has_audio": false } ] },
     { "kind": "video", "formats": [ { "url": "...", "width": 720,  "height": 1280, "has_audio": true  } ] }

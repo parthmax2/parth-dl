@@ -3,6 +3,36 @@
 All notable changes to parth-dl are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-07-25
+
+### Added
+
+- Minimal CLI redesign with compact status rows, cleaner progress output, a final
+  summary line, and a "Developed by Parthmax" caption.
+- Dedicated documentation pages for Python package usage, local HTTP API usage, and
+  the local Web UI.
+- Regeneratable README demo GIF via `scripts/render_cli_gif.py`.
+- **Current logged-out Instagram GraphQL flow** — reels whose embed payload omits
+  `video_url` can now be downloaded anonymously through Instagram's Polaris media
+  query. No account cookies or login are required for public content exposed by
+  this endpoint.
+- Anonymous session setup now obtains the required LSD and CSRF tokens and checks
+  Instagram's per-post access ruling before requesting media.
+
+### Fixed
+
+- Repeated progressive URLs in Polaris responses are deduplicated.
+- Combined H.264/AAC reel renditions are preferred, preserving the zero-dependency
+  download path without requiring FFmpeg to merge DASH tracks.
+- CI no longer includes Python 3.8 jobs; supported Python versions now start at 3.9.
+- Documentation now consistently links the CLI, Python package, HTTP API, and Web UI
+  guides from the README.
+
+### Tests
+
+- Grown to **134** tests across CLI, extraction, downloader, server, and utility
+  behavior.
+
 ## [1.1.0] — 2026-07-13
 
 ### Added
@@ -22,7 +52,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   for reporting progress in your own UI.
 - **Documentation** — [`docs/`](docs/) now covers the CLI, the Python API, the HTTP API, the
   metadata schema, and copy-paste recipes for Node, Go, PHP, Discord and Bash.
-- **CI** — tests now run on Python 3.8–3.13 across Linux, macOS and Windows, with `ruff`
+- **CI** — at the time of this release, tests ran on Python 3.8-3.13 across Linux,
+  macOS and Windows, with `ruff`
   and a packaging smoke check.
 
 ### Changed
@@ -36,7 +67,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - Package metadata claimed `__author__ = "Parth"` while the distribution said
   "Saksham Pathak (Parthmax)". Now consistent.
-- The Python version badge claimed 3.7+, but the code requires 3.8+.
+- The Python version badge claimed 3.7+, but the code required 3.8+ at the time.
 
 ### Tests
 

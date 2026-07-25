@@ -10,18 +10,22 @@ Standard library only, like the rest of the package.
 import argparse
 import json
 import mimetypes
+import queue
+import socket
 import threading
+import time
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from . import __version__
 from .core import InstagramDownloader
 from .utils import (
     DownloadError,
     NetworkError,
+    RateLimiter,
     RateLimitError,
     ValidationError,
     symbols,
@@ -35,9 +39,19 @@ MAX_BODY_BYTES = 8 * 1024
 # Hosts a browser may legitimately use to reach a loopback-bound server.
 LOOPBACK_HOSTS = {'127.0.0.1', 'localhost', '::1', '[::1]'}
 
+
+class ServiceBusyError(DownloadError):
+    """Raised when the bounded local download queue is full."""
+
+
+class JobCancelledError(DownloadError):
+    """Raised cooperatively when a running job is cancelled."""
+
+
 # Map the downloader's exception hierarchy onto HTTP status codes, so a caller
 # in any language can branch on the status instead of parsing messages.
 ERROR_STATUS = [
+    (ServiceBusyError, 503),
     (ValidationError, 400),
     (RateLimitError, 429),
     (NetworkError, 502),
@@ -62,84 +76,335 @@ class JobStore:
         self._order = []
         self._lock = threading.Lock()
 
-    def create(self, url):
+    def create(self, url, quality='best', media=None):
         job_id = uuid.uuid4().hex
         with self._lock:
             self._jobs[job_id] = {
                 'id': job_id,
                 'url': url,
-                'state': 'running',
+                'quality': quality,
+                'state': 'queued',
+                'queue_position': None,
                 'percent': 0,
+                'current_item': 0,
+                'total_items': len((media or {}).get('entries') or []),
                 'files': [],
                 'error': None,
+                'message': 'Queued',
+                'media': self._media_summary(media),
+                'created_at': time.time(),
             }
             self._order.append(job_id)
-
-            # Bound the history so a long-lived server cannot grow without limit
-            while len(self._order) > self.MAX_JOBS:
-                self._jobs.pop(self._order.pop(0), None)
+            self._trim_locked()
 
         return job_id
+
+    @staticmethod
+    def _media_summary(info):
+        if not info:
+            return None
+        return {
+            'title': info.get('title'),
+            'uploader': info.get('uploader'),
+            'type': info.get('type'),
+            'thumbnail': info.get('thumbnail'),
+            'item_count': len(info.get('entries') or []),
+        }
 
     def update(self, job_id, **fields):
         with self._lock:
             job = self._jobs.get(job_id)
             if job:
                 job.update(fields)
+                self._trim_locked()
+
+    def _trim_locked(self):
+        """Evict old finished jobs without losing work that is still running."""
+        while len(self._order) > self.MAX_JOBS:
+            removable = next(
+                (job_id for job_id in self._order
+                 if self._jobs[job_id]['state'] not in ('queued', 'running')),
+                None,
+            )
+            if removable is None:
+                break
+            self._order.remove(removable)
+            self._jobs.pop(removable, None)
 
     def get(self, job_id):
         with self._lock:
             job = self._jobs.get(job_id)
             return dict(job) if job else None
 
+    def list(self):
+        """Return newest-first snapshots for restoring the UI after refresh."""
+        with self._lock:
+            return [
+                dict(self._jobs[job_id])
+                for job_id in reversed(self._order)
+                if job_id in self._jobs
+            ]
+
 
 class DownloadService:
     """Runs downloads on worker threads and reports progress into a JobStore"""
+
+    MAX_PENDING = 25
+    INFO_CACHE_SECONDS = 120
 
     def __init__(self, download_dir, verbose=False):
         self.download_dir = Path(download_dir).resolve()
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.verbose = verbose
         self.jobs = JobStore()
+        self.rate_limiter = RateLimiter(max_requests=30, time_window=60)
+        self._queue = queue.Queue()
+        self._worker = None
+        self._worker_lock = threading.Lock()
+        self._closed = False
+        self._pending_ids = []
+        self._cancel_events = {}
+        self._cancelled_ids = set()
+        self._info_cache = {}
+        self._cache_lock = threading.Lock()
 
     def get_info(self, url):
-        return InstagramDownloader(verbose=self.verbose, quiet=True).get_info(url)
+        info = InstagramDownloader(
+            verbose=self.verbose, quiet=True, rate_limiter=self.rate_limiter,
+        ).get_info(url)
+        self._cache_info(url, info)
+        return info
+
+    def _cache_info(self, url, info):
+        with self._cache_lock:
+            self._info_cache[url] = (time.monotonic(), info)
+            if len(self._info_cache) > JobStore.MAX_JOBS:
+                oldest = min(
+                    self._info_cache,
+                    key=lambda key: self._info_cache[key][0],
+                )
+                self._info_cache.pop(oldest, None)
+
+    def _cached_info(self, url):
+        with self._cache_lock:
+            cached = self._info_cache.get(url)
+            if not cached:
+                return None
+            created, info = cached
+            if time.monotonic() - created > self.INFO_CACHE_SECONDS:
+                self._info_cache.pop(url, None)
+                return None
+            return info
 
     def start_download(self, url, quality='best'):
-        job_id = self.jobs.create(url)
-        thread = threading.Thread(
-            target=self._run, args=(job_id, url, quality), daemon=True
-        )
-        thread.start()
+        with self._worker_lock:
+            if self._closed:
+                raise ServiceBusyError("Download service is stopping")
+            if len(self._pending_ids) >= self.MAX_PENDING:
+                raise ServiceBusyError("Download queue is full; try again later")
+            if self._worker is None:
+                self._worker = threading.Thread(
+                    target=self._worker_loop, name='parth-dl-worker', daemon=True,
+                )
+                self._worker.start()
+
+            info = self._cached_info(url)
+            job_id = self.jobs.create(url, quality=quality, media=info)
+            self._cancel_events[job_id] = threading.Event()
+            self._pending_ids.append(job_id)
+            self._refresh_queue_positions_locked()
+            self._queue.put_nowait((job_id, url, quality, info))
         return job_id
 
-    def _run(self, job_id, url, quality):
+    def _refresh_queue_positions_locked(self):
+        for position, job_id in enumerate(self._pending_ids, 1):
+            self.jobs.update(
+                job_id, queue_position=position,
+                message=f'Queued (position {position})',
+            )
+
+    def _worker_loop(self):
+        while True:
+            task = self._queue.get()
+            try:
+                if task is None:
+                    return
+                job_id = task[0]
+                with self._worker_lock:
+                    if job_id in self._pending_ids:
+                        self._pending_ids.remove(job_id)
+                    self._refresh_queue_positions_locked()
+                    if job_id in self._cancelled_ids:
+                        self._cancelled_ids.remove(job_id)
+                        self._cancel_events.pop(job_id, None)
+                        continue
+                    self.jobs.update(
+                        job_id, state='running', queue_position=None,
+                        message='Preparing download',
+                    )
+                self._run(*task)
+            finally:
+                self._queue.task_done()
+
+    def _run(self, job_id, url, quality, info=None):
+        cancel_event = self._cancel_events[job_id]
+        downloader = None
+
         def on_progress(downloaded, total):
-            # `total` is 0 when the CDN sends no Content-Length; report -1 so the
-            # UI can show an indeterminate bar rather than a bogus 0%.
-            percent = round(downloaded / total * 100) if total else -1
-            self.jobs.update(job_id, percent=percent)
+            if cancel_event.is_set():
+                raise JobCancelledError("Cancelled by user")
+
+            item = downloader.progress_item_index
+            count = max(downloader.progress_item_count, 1)
+            if total:
+                item_fraction = min(downloaded / total, 1)
+                percent = round(((item - 1) + item_fraction) / count * 100)
+            else:
+                percent = -1
+            self.jobs.update(
+                job_id, percent=percent, current_item=item,
+                total_items=count, message=f'Downloading item {item} of {count}',
+            )
 
         try:
             downloader = InstagramDownloader(
                 verbose=self.verbose, quiet=True, progress_hook=on_progress,
-            )
-            result = downloader.download(
-                url, output_path=str(self.download_dir), quality=quality,
+                rate_limiter=self.rate_limiter,
             )
 
-            # download() returns a bare path for a single item, a list for a carousel
-            paths = result if isinstance(result, list) else [result]
+            total_items = len((info or {}).get('entries') or [])
+            if info is not None:
+                self.jobs.update(
+                    job_id, media=JobStore._media_summary(info),
+                    total_items=total_items,
+                )
+
+            if cancel_event.is_set():
+                raise JobCancelledError("Cancelled by user")
+
+            download_kwargs = {
+                'output_path': str(self.download_dir),
+                'quality': quality,
+            }
+            if info is not None:
+                download_kwargs['info'] = info
+            result = downloader.download(url, **download_kwargs)
+
+            if info is None and downloader.last_info is not None:
+                info = downloader.last_info
+                self._cache_info(url, info)
+                total_items = len(info.get('entries') or [])
+                self.jobs.update(
+                    job_id, media=JobStore._media_summary(info),
+                    total_items=total_items,
+                )
+
+            new_paths = result if isinstance(result, list) else [result]
+            skipped_paths = downloader.last_skipped_files
+            existing = {str(Path(path).resolve()) for path in skipped_paths}
+            paths = new_paths + skipped_paths
             files = [
-                {'name': Path(p).name, 'url': f'/files/{Path(p).name}'}
-                for p in paths
+                {
+                    'name': Path(path).name,
+                    'url': f'/files/{quote(Path(path).name)}',
+                    'path': str(Path(path).resolve()),
+                    'existing': str(Path(path).resolve()) in existing,
+                }
+                for path in paths
             ]
-            self.jobs.update(job_id, state='done', percent=100, files=files)
+            if not new_paths and skipped_paths:
+                message = 'Already downloaded'
+            elif skipped_paths:
+                message = (
+                    f'Saved {len(new_paths)} new; '
+                    f'{len(skipped_paths)} already existed'
+                )
+            else:
+                message = f'Saved {len(new_paths)} file(s)'
+            self.jobs.update(
+                job_id, state='done', percent=100, files=files,
+                message=message, current_item=total_items,
+            )
 
+        except JobCancelledError:
+            self.jobs.update(
+                job_id, state='cancelled', error=None,
+                message='Cancelled; partial download kept for resume',
+            )
         except Exception as e:
             self.jobs.update(
                 job_id, state='error', error=str(e), status=status_for(e),
+                message='Download failed',
             )
+        finally:
+            self._cancel_events.pop(job_id, None)
+
+    def cancel(self, job_id):
+        with self._worker_lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                raise ValidationError("No such job")
+
+            if job['state'] == 'queued':
+                self._cancel_events[job_id].set()
+                self._cancelled_ids.add(job_id)
+                if job_id in self._pending_ids:
+                    self._pending_ids.remove(job_id)
+                self.jobs.update(
+                    job_id, state='cancelled', queue_position=None,
+                    message='Cancelled before download started',
+                )
+                self._refresh_queue_positions_locked()
+            elif job['state'] == 'running':
+                self._cancel_events[job_id].set()
+                self.jobs.update(
+                    job_id, cancel_requested=True, message='Cancelling…',
+                )
+
+            return self.jobs.get(job_id)
+
+    def retry(self, job_id):
+        job = self.jobs.get(job_id)
+        if not job:
+            raise ValidationError("No such job")
+        if job['state'] not in ('error', 'cancelled'):
+            raise ValidationError("Only failed or cancelled jobs can be retried")
+        return self.start_download(job['url'], job.get('quality', 'best'))
+
+    def close(self, wait=True):
+        """Stop the bounded worker and release its resources."""
+        with self._worker_lock:
+            if self._closed:
+                return
+            self._closed = True
+            worker = self._worker
+
+            if not wait:
+                while True:
+                    try:
+                        task = self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if task is not None:
+                        job_id = task[0]
+                        self.jobs.update(
+                            job_id, state='cancelled', error=None,
+                            message='Server stopped before download started',
+                        )
+                        if job_id in self._pending_ids:
+                            self._pending_ids.remove(job_id)
+                        self._cancel_events.pop(job_id, None)
+                        self._cancelled_ids.discard(job_id)
+                    self._queue.task_done()
+                self._refresh_queue_positions_locked()
+
+            if worker is not None:
+                self._queue.put_nowait(None)
+
+        if wait:
+            self._queue.join()
+            if worker is not None:
+                worker.join()
 
     def resolve_file(self, name):
         """
@@ -182,7 +447,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({'error': message}, status=status)
 
     def _read_json(self):
-        length = int(self.headers.get('Content-Length') or 0)
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+        except (TypeError, ValueError):
+            return None
         if length <= 0 or length > MAX_BODY_BYTES:
             return None
         try:
@@ -215,7 +483,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_ui()
 
         if path == '/api/health':
-            return self._send_json({'ok': True, 'version': __version__})
+            return self._send_json({
+                'ok': True,
+                'version': __version__,
+                'download_dir': str(self.service.download_dir),
+            })
+
+        if path == '/api/jobs':
+            return self._send_json({'jobs': self.service.jobs.list()})
 
         if path.startswith('/api/jobs/'):
             return self._get_job(path[len('/api/jobs/'):])
@@ -235,6 +510,14 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None or not isinstance(payload, dict):
             return self._error(400, 'Expected a JSON object body')
 
+        if path.startswith('/api/jobs/'):
+            parts = path.strip('/').split('/')
+            if len(parts) == 4 and parts[3] == 'cancel':
+                return self._post_cancel(parts[2])
+            if len(parts) == 4 and parts[3] == 'retry':
+                return self._post_retry(parts[2])
+            return self._error(404, 'Not found')
+
         url = payload.get('url')
         if not url or not isinstance(url, str):
             return self._error(400, 'Missing "url"')
@@ -246,9 +529,11 @@ class Handler(BaseHTTPRequestHandler):
             quality = payload.get('quality', 'best')
             if quality not in ('best', 'worst'):
                 return self._error(400, 'quality must be "best" or "worst"')
-            return self._send_json(
-                {'job_id': self.service.start_download(url, quality)}, status=202
-            )
+            try:
+                job_id = self.service.start_download(url, quality)
+            except ServiceBusyError as e:
+                return self._error(503, str(e))
+            return self._send_json({'job_id': job_id}, status=202)
 
         self._error(404, 'Not found')
 
@@ -263,6 +548,21 @@ class Handler(BaseHTTPRequestHandler):
         if not job:
             return self._error(404, 'No such job')
         return self._send_json(job)
+
+    def _post_cancel(self, job_id):
+        try:
+            return self._send_json(self.service.cancel(job_id))
+        except ValidationError as e:
+            return self._error(404 if str(e) == 'No such job' else 409, str(e))
+
+    def _post_retry(self, job_id):
+        try:
+            new_job_id = self.service.retry(job_id)
+            return self._send_json({'job_id': new_job_id}, status=202)
+        except ServiceBusyError as e:
+            return self._error(503, str(e))
+        except ValidationError as e:
+            return self._error(404 if str(e) == 'No such job' else 409, str(e))
 
     def _serve_ui(self):
         index = WEB_ROOT / 'index.html'
@@ -320,26 +620,41 @@ def serve(host='127.0.0.1', port=8000, download_dir='downloads',
           open_browser=True, verbose=False):
     """Run the web UI / JSON API until interrupted. Returns a process exit code."""
     sym = symbols()
-    service = DownloadService(download_dir, verbose=verbose)
 
-    is_loopback = host in LOOPBACK_HOSTS
+    is_loopback = host in {'127.0.0.1', 'localhost', '::1'}
+    if not is_loopback:
+        raise ValidationError(
+            "The web UI is local-only; --host must be 127.0.0.1, localhost, or ::1"
+        )
+
+    service = DownloadService(download_dir, verbose=verbose)
 
     handler = type('BoundHandler', (Handler,), {
         'service': service,
-        'enforce_loopback': is_loopback,
+        'enforce_loopback': True,
     })
 
-    httpd = ThreadingHTTPServer((host, port), handler)
+    server_class = ThreadingHTTPServer
+    if ':' in host:
+        server_class = type(
+            'IPv6ThreadingHTTPServer',
+            (ThreadingHTTPServer,),
+            {'address_family': socket.AF_INET6},
+        )
+
+    try:
+        httpd = server_class((host, port), handler)
+    except Exception:
+        service.close(wait=False)
+        raise
     httpd.verbose = verbose
     httpd.daemon_threads = True
 
-    url = f'http://{host if is_loopback else host}:{httpd.server_port}/'
+    display_host = f'[{host}]' if ':' in host else host
+    url = f'http://{display_host}:{httpd.server_port}/'
 
     print(f"\n{sym['ok']} parth-dl web UI  ->  {url}")
     print(f"  Downloads: {service.download_dir}")
-    if not is_loopback:
-        print(f"\n{sym['warn']} Bound to {host}, not loopback: anyone who can reach this "
-              f"port can download through your IP address.")
     print("\nPress Ctrl+C to stop.\n")
 
     if open_browser:
@@ -351,5 +666,6 @@ def serve(host='127.0.0.1', port=8000, download_dir='downloads',
         print(f"\n{sym['ok']} Stopped.")
     finally:
         httpd.server_close()
+        service.close(wait=False)
 
     return 0

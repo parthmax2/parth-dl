@@ -1,5 +1,8 @@
 # Recipes — using parth-dl from any app
 
+For package setup, local testing, and contribution workflow, see
+[development.md](development.md).
+
 Three integration surfaces, in order of preference:
 
 1. **You're in Python?** Import it — [python-api.md](python-api.md).

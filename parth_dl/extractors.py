@@ -6,6 +6,7 @@ Each extractor handles parsing and validation
 import http.cookiejar
 import json
 import re
+import sys
 import urllib.parse
 import urllib.request
 
@@ -27,7 +28,9 @@ class BaseExtractor:
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
+        # urllib does not decode Content-Encoding automatically. Advertise only
+        # gzip, which the standard library can decode below.
+        'Accept-Encoding': 'gzip',
         'Origin': 'https://www.instagram.com',
         'Referer': 'https://www.instagram.com/',
         'Sec-Fetch-Dest': 'empty',
@@ -41,8 +44,9 @@ class BaseExtractor:
         'X-IG-WWW-Claim': '0',
     }
 
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, rate_limiter=None):
         self.verbose = verbose
+        self.rate_limiter = rate_limiter
         # A real cookie jar, so Set-Cookie values are actually replayed on later
         # requests. The old code parsed cookies into a dict and never sent them,
         # which is why every endpoint needing a csrftoken answered 403.
@@ -59,7 +63,7 @@ class BaseExtractor:
     def log(self, message):
         """Print verbose log messages"""
         if self.verbose:
-            print(f"[Extractor] {message}")
+            print(f"[Extractor] {message}", file=sys.stderr)
 
     @retry_on_failure(max_retries=3)
     def _make_request(self, url, headers=None, data=None, decode=True):
@@ -69,6 +73,9 @@ class BaseExtractor:
             request_headers.update(headers)
 
         try:
+            if self.rate_limiter:
+                self.rate_limiter.wait_if_needed()
+
             if data:
                 data = urllib.parse.urlencode(data).encode()
 
@@ -81,15 +88,6 @@ class BaseExtractor:
             if response.headers.get('Content-Encoding') == 'gzip':
                 import gzip
                 content = gzip.decompress(content)
-
-            # Handle brotli compression (Instagram sometimes uses this)
-            elif response.headers.get('Content-Encoding') == 'br':
-                try:
-                    import brotli
-                    content = brotli.decompress(content)
-                except ImportError:
-                    # If brotli not available, try without decompression
-                    pass
 
             # Return decoded text or raw bytes
             if decode:
@@ -154,6 +152,8 @@ class MediaExtractor(BaseExtractor):
     """Extract posts and reels (videos/images)"""
 
     API_BASE = 'https://i.instagram.com/api/v1'
+    LOGGED_OUT_QUERY_NAME = 'PolarisLoggedOutDesktopWWWPostRootContentQuery'
+    LOGGED_OUT_QUERY_DOC_ID = '27130156389949648'
 
     def extract(self, url):
         """
@@ -166,16 +166,17 @@ class MediaExtractor(BaseExtractor):
 
         self.log(f"Extracting media: {shortcode}")
 
-        # Embed goes first: it is the only endpoint that still answers a
-        # logged-out client. The private API (403/500) and GraphQL (rotating
-        # doc_ids -> "execution error") now require a session, so they are kept
-        # only as fallbacks in case a future/authenticated session revives them.
+        # Embed remains the cheapest path for posts Instagram exposes directly.
+        # GraphQL then uses the logged-out Polaris endpoint, which covers reels
+        # whose embed contains metadata/cover art but deliberately omits the
+        # playable URL. The legacy private API is retained as a final fallback.
         methods = [
             ('Embed', self._extract_from_embed),
             ('GraphQL', self._extract_from_graphql),
             ('API', self._extract_from_api),
         ]
 
+        errors = []
         for method_name, method in methods:
             try:
                 self.log(f"Attempting {method_name} extraction...")
@@ -185,11 +186,24 @@ class MediaExtractor(BaseExtractor):
                     return result
                 else:
                     self.log(f"{method_name} returned no data")
-            except Exception as e:
+            except (RateLimitError, NetworkError, DownloadError) as e:
                 # Instagram often 403s one endpoint while another still answers,
                 # so every method gets its turn before we give up.
                 self.log(f"{method_name} failed: {e}")
-                continue
+                errors.append(e)
+            except Exception as e:
+                # A parser bug in one fallback must not prevent a later method
+                # from succeeding, but it is not mislabeled as a network error.
+                self.log(f"{method_name} failed unexpectedly: {e}")
+                errors.append(DownloadError(str(e)))
+
+        # Preserve actionable failure types. A 429 takes precedence because
+        # trying yet another endpoint makes it worse; otherwise report a network
+        # outage before falling back to the generic private/deleted diagnosis.
+        for error_type in (RateLimitError, NetworkError):
+            matching = [error for error in errors if isinstance(error, error_type)]
+            if matching:
+                raise matching[-1]
 
         raise DownloadError(
             "All extraction methods failed. The content may be private or deleted, "
@@ -208,7 +222,9 @@ class MediaExtractor(BaseExtractor):
         try:
             self._make_request(post_url)
             self.log("Session setup successful")
-        except Exception as e:
+        except (RateLimitError, NetworkError):
+            raise
+        except DownloadError as e:
             self.log(f"Session setup warning: {e}")
 
         # API request
@@ -229,14 +245,122 @@ class MediaExtractor(BaseExtractor):
                 return self._parse_media_item(data['items'][0])
             else:
                 self.log("No items in API response")
-        except Exception as e:
+        except (RateLimitError, NetworkError, DownloadError):
+            raise
+        except (ValueError, TypeError, KeyError) as e:
             self.log(f"API extraction error: {e}")
 
         return None
 
+    @staticmethod
+    def _extract_lsd_token(webpage):
+        """Extract the per-session token required by logged-out GraphQL."""
+        patterns = (
+            r'\["LSD",\[\],\{"token":"([^"]+)"',
+            r'"LSD",\[\],\{"token":"([^"]+)"',
+        )
+        for pattern in patterns:
+            match = re.search(pattern, webpage)
+            if match:
+                return match.group(1)
+
+        # Some deployments put the token in the JSON body of the __eqmc script.
+        match = re.search(
+            r'<script\b[^>]*\bid=["\']__eqmc["\'][^>]*>(.*?)</script>',
+            webpage, re.DOTALL,
+        )
+        if match:
+            try:
+                data = json.loads(match.group(1))
+                token = data.get('l')
+                if isinstance(token, str):
+                    return token
+            except (TypeError, ValueError):
+                pass
+        return None
+
+    def _extract_from_polaris(self, shortcode):
+        """Use Instagram's current logged-out web GraphQL flow."""
+        self.log("Trying logged-out Polaris GraphQL extraction...")
+
+        homepage = self._make_request('https://www.instagram.com/')
+        lsd_token = self._extract_lsd_token(homepage)
+        if not lsd_token:
+            self.log("Polaris session did not provide an LSD token")
+            return None
+
+        media_id = self._shortcode_to_mediaid(shortcode)
+        ruling_url = (
+            f'{self.API_BASE}/web/get_ruling_for_content/?'
+            + urllib.parse.urlencode({
+                'content_type': 'MEDIA',
+                'target_id': media_id,
+            })
+        )
+        ruling = json.loads(self._make_request(
+            ruling_url, headers=self.API_HEADERS,
+        ))
+        if ruling.get('status') != 'ok':
+            detail = ruling.get('title') or ruling.get('description')
+            self.log(f"Instagram did not grant anonymous access{': ' + detail if detail else ''}")
+            return None
+
+        csrf_token = self.cookies.get('csrftoken', '')
+        if not csrf_token:
+            self.log("Polaris session did not provide a CSRF token")
+            return None
+
+        headers = {
+            **self.API_HEADERS,
+            'X-FB-Friendly-Name': self.LOGGED_OUT_QUERY_NAME,
+            'X-CSRFToken': csrf_token,
+            'X-FB-LSD': lsd_token,
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': f'https://www.instagram.com/reel/{shortcode}/',
+        }
+        payload = {
+            'lsd': lsd_token,
+            'fb_api_caller_class': 'RelayModern',
+            'fb_api_req_friendly_name': self.LOGGED_OUT_QUERY_NAME,
+            'server_timestamps': 'true',
+            'variables': json.dumps({'media_id': media_id}, separators=(',', ':')),
+            'doc_id': self.LOGGED_OUT_QUERY_DOC_ID,
+        }
+        response = json.loads(self._make_request(
+            'https://www.instagram.com/api/graphql',
+            headers=headers,
+            data=payload,
+        ))
+
+        if response.get('errors'):
+            self.log(f"Polaris GraphQL returned errors: {response['errors']}")
+
+        media = (response.get('data') or {}).get('xig_polaris_media') or {}
+        product = media.get('if_not_gated_logged_out') or {}
+        if not product:
+            self.log("Polaris GraphQL returned no anonymously accessible media")
+            return None
+
+        return self._parse_media_item(product)
+
     def _extract_from_graphql(self, shortcode):
-        """Extract using GraphQL (fallback)"""
-        self.log("Trying GraphQL extraction...")
+        """Extract using current GraphQL, with the legacy query as fallback."""
+        try:
+            result = self._extract_from_polaris(shortcode)
+            if result and result.get('entries'):
+                return result
+        except RateLimitError:
+            raise
+        except (DownloadError, NetworkError, ValueError, TypeError, KeyError) as e:
+            # A rotating token/doc-id or endpoint-specific rejection should not
+            # disable the older query, which occasionally still answers.
+            self.log(f"Polaris GraphQL failed: {e}")
+
+        return self._extract_from_legacy_graphql(shortcode)
+
+    def _extract_from_legacy_graphql(self, shortcode):
+        """Extract using Instagram's older shortcode GraphQL query."""
+        self.log("Trying legacy GraphQL extraction...")
 
         variables = {
             'shortcode': shortcode,
@@ -271,7 +395,9 @@ class MediaExtractor(BaseExtractor):
                 return self._parse_graphql_media(media)
             else:
                 self.log("No media found in GraphQL response")
-        except Exception as e:
+        except (RateLimitError, NetworkError, DownloadError):
+            raise
+        except (ValueError, TypeError, KeyError) as e:
             self.log(f"GraphQL extraction error: {e}")
 
         return None
@@ -354,7 +480,9 @@ class MediaExtractor(BaseExtractor):
                     if media:
                         self.log("Found media in PostPage")
                         return self._parse_graphql_media(media)
-        except Exception as e:
+        except (RateLimitError, NetworkError, DownloadError):
+            raise
+        except (ValueError, TypeError, KeyError) as e:
             self.log(f"Embed extraction error: {e}")
 
         return None
@@ -367,7 +495,7 @@ class MediaExtractor(BaseExtractor):
         title = caption.get('text', '')[:100] if isinstance(caption, dict) else ''
 
         result = {
-            'id': self._mediaid_to_shortcode(item.get('pk', '')) or 'unknown',
+            'id': item.get('code') or self._mediaid_to_shortcode(item.get('pk', '')) or 'unknown',
             'title': title or f"Media by {uploader}",
             'entries': [],
             'thumbnail': None,
@@ -386,15 +514,23 @@ class MediaExtractor(BaseExtractor):
             video_versions = media_item.get('video_versions') or []
 
             if video_versions:
-                result['entries'].append({
-                    'kind': 'video',
-                    'formats': [{
-                        'url': video.get('url'),
+                seen_urls = set()
+                formats = []
+                for f_idx, video in enumerate(video_versions):
+                    video_url = video.get('url')
+                    if not video_url or video_url in seen_urls:
+                        continue
+                    seen_urls.add(video_url)
+                    formats.append({
+                        'url': video_url,
                         'width': video.get('width'),
                         'height': video.get('height'),
                         'format_id': f"video-{idx}-{f_idx}",
-                        'has_audio': True,
-                    } for f_idx, video in enumerate(video_versions)],
+                        'has_audio': media_item.get('has_audio', True),
+                    })
+                result['entries'].append({
+                    'kind': 'video',
+                    'formats': formats,
                 })
                 continue
 
@@ -446,6 +582,10 @@ class MediaExtractor(BaseExtractor):
         for idx, node in enumerate(children):
             dims = node.get('dimensions') or {}
             video_url = node.get('video_url')
+            is_video = (
+                bool(node.get('is_video'))
+                or node.get('__typename') == 'GraphVideo'
+            )
 
             if video_url:
                 result['entries'].append({
@@ -458,6 +598,14 @@ class MediaExtractor(BaseExtractor):
                         'has_audio': True,
                     }],
                 })
+                continue
+
+            # Current logged-out embed payloads often expose only a reel's cover
+            # image while omitting the protected video URL. Never present that
+            # cover as the downloadable reel; an empty entry list makes the
+            # fallback chain continue and ultimately report the login wall.
+            if is_video:
+                self.log("Video payload contained no playable URL")
                 continue
 
             display_url = node.get('display_url')
@@ -517,14 +665,23 @@ class ProfilePictureExtractor(BaseExtractor):
             self._extract_from_api,
         ]
 
+        errors = []
         for method in methods:
             try:
                 result = method(username)
                 if result:
                     return result
-            except Exception as e:
+            except (RateLimitError, NetworkError, DownloadError) as e:
                 self.log(f"Method failed: {e}")
-                continue
+                errors.append(e)
+            except Exception as e:
+                self.log(f"Method failed unexpectedly: {e}")
+                errors.append(DownloadError(str(e)))
+
+        for error_type in (RateLimitError, NetworkError):
+            matching = [error for error in errors if isinstance(error, error_type)]
+            if matching:
+                raise matching[-1]
 
         raise DownloadError(f"Could not extract profile picture for @{username}")
 
@@ -578,7 +735,9 @@ class ProfilePictureExtractor(BaseExtractor):
 
                 if pic_url:
                     return self._build_result(username, pic_url)
-        except Exception as e:
+        except (RateLimitError, NetworkError, DownloadError):
+            raise
+        except (ValueError, TypeError, KeyError) as e:
             self.log(f"API extraction error: {e}")
 
         return None

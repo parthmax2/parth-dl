@@ -5,6 +5,7 @@ Driven against a real server on a loopback port, so the routing, the status-code
 contract and the path/host guards are exercised end to end rather than mocked.
 """
 
+import io
 import json
 import shutil
 import tempfile
@@ -18,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from parth_dl import __version__
-from parth_dl.server import DownloadService, Handler
+from parth_dl.server import DownloadService, Handler, ServiceBusyError, serve
 from parth_dl.utils import DownloadError, NetworkError, RateLimitError, ValidationError
 
 
@@ -29,6 +30,7 @@ class ServerTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmpdir, True)
 
         self.service = DownloadService(self.tmpdir / 'downloads')
+        self.addCleanup(self.service.close)
 
         handler = type('BoundHandler', (Handler,), {'service': self.service})
         self.httpd = ThreadingHTTPServer(('127.0.0.1', 0), handler)
@@ -70,10 +72,19 @@ class ServerTestCase(unittest.TestCase):
         deadline = time.time() + timeout
         while time.time() < deadline:
             _, job = self.request(f'/api/jobs/{job_id}')
-            if job['state'] != 'running':
+            if job['state'] in ('done', 'error', 'cancelled'):
                 return job
             time.sleep(0.02)
         self.fail(f'job {job_id} never finished')
+
+    def wait_for_state(self, job_id, expected, timeout=5):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            job = self.service.jobs.get(job_id)
+            if job['state'] == expected:
+                return job
+            time.sleep(0.01)
+        self.fail(f'job {job_id} never reached {expected}')
 
 
 class RoutingTest(ServerTestCase):
@@ -82,7 +93,9 @@ class RoutingTest(ServerTestCase):
         status, body = self.request('/api/health')
 
         self.assertEqual(status, 200)
-        self.assertEqual(body, {'ok': True, 'version': __version__})
+        self.assertEqual(body['ok'], True)
+        self.assertEqual(body['version'], __version__)
+        self.assertEqual(body['download_dir'], str(self.service.download_dir))
 
     def test_index_serves_the_ui(self):
         status, body = self.request('/')
@@ -157,7 +170,10 @@ class DownloadJobTest(ServerTestCase):
 
         self.assertEqual(job['state'], 'done')
         self.assertEqual(job['percent'], 100)
-        self.assertEqual(job['files'], [{'name': 'clip.mp4', 'url': '/files/clip.mp4'}])
+        self.assertEqual(job['files'][0]['name'], 'clip.mp4')
+        self.assertEqual(job['files'][0]['url'], '/files/clip.mp4')
+        self.assertEqual(job['files'][0]['path'], str(target.resolve()))
+        self.assertFalse(job['files'][0]['existing'])
 
         # ...and the file is actually retrievable through the URL it advertises
         status, content = self.request(job['files'][0]['url'])
@@ -230,6 +246,232 @@ class DownloadJobTest(ServerTestCase):
 
         self.assertEqual(seen, [-1])
 
+    def test_download_jobs_run_through_a_single_worker_queue(self):
+        gate = threading.Event()
+        lock = threading.Lock()
+        active = 0
+        maximum = 0
+
+        def fake_download(self_, url, output_path=None, quality='best'):
+            nonlocal active, maximum
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+            gate.wait(2)
+            with lock:
+                active -= 1
+            return str(self.service.download_dir / f'{url[-2]}.mp4')
+
+        with mock.patch('parth_dl.server.InstagramDownloader.download', fake_download):
+            first = self.service.start_download('https://www.instagram.com/p/A/')
+            second = self.service.start_download('https://www.instagram.com/p/B/')
+            time.sleep(0.05)
+            self.assertEqual(maximum, 1)
+            gate.set()
+            self.wait_for_job(first)
+            self.wait_for_job(second)
+
+        self.assertEqual(maximum, 1)
+
+    def test_queue_capacity_is_bounded(self):
+        self.service._pending_ids = [
+            f'occupied-{index}' for index in range(self.service.MAX_PENDING)
+        ]
+
+        with self.assertRaises(ServiceBusyError):
+            self.service.start_download('https://www.instagram.com/p/A/')
+
+    def test_jobs_share_one_rate_limiter(self):
+        with mock.patch('parth_dl.server.InstagramDownloader') as downloader:
+            downloader.return_value.get_info.return_value = {'id': 'x'}
+            self.service.get_info('https://www.instagram.com/p/A/')
+
+        self.assertIs(
+            downloader.call_args.kwargs['rate_limiter'],
+            self.service.rate_limiter,
+        )
+
+    def test_info_result_is_reused_by_the_following_download(self):
+        url = 'https://www.instagram.com/p/A/'
+        info = {
+            'id': 'A', 'title': 'cached', 'uploader': 'user', 'type': 'image',
+            'thumbnail': None,
+            'entries': [{'kind': 'image', 'formats': [{'url': 'https://cdn/a.jpg'}]}],
+        }
+        seen = []
+
+        def fake_download(self_, url_, output_path=None, quality='best', info=None):
+            seen.append(info)
+            return str(self.service.download_dir / 'a.jpg')
+
+        with mock.patch(
+            'parth_dl.server.InstagramDownloader.get_info', return_value=info,
+        ) as extract, mock.patch(
+            'parth_dl.server.InstagramDownloader.download', fake_download,
+        ):
+            self.service.get_info(url)
+            job_id = self.service.start_download(url)
+            self.wait_for_job(job_id)
+
+        self.assertEqual(extract.call_count, 1)
+        self.assertIs(seen[0], info)
+
+    def test_queued_job_exposes_position_then_runs(self):
+        gate = threading.Event()
+
+        def fake_download(self_, url, output_path=None, quality='best'):
+            gate.wait(2)
+            return str(self.service.download_dir / 'x.mp4')
+
+        with mock.patch('parth_dl.server.InstagramDownloader.download', fake_download):
+            first = self.service.start_download('https://www.instagram.com/p/A/')
+            self.wait_for_state(first, 'running')
+            second = self.service.start_download('https://www.instagram.com/p/B/')
+
+            queued = self.service.jobs.get(second)
+            self.assertEqual(queued['state'], 'queued')
+            self.assertEqual(queued['queue_position'], 1)
+
+            gate.set()
+            self.wait_for_job(first)
+            self.wait_for_job(second)
+
+    def test_carousel_progress_is_aggregate_and_never_resets(self):
+        seen = []
+
+        def fake_download(self_, url, output_path=None, quality='best'):
+            self_.progress_item_count = 2
+            self_.progress_item_index = 1
+            self_.progress_hook(100, 100)
+            seen.append(self.service.jobs.get(job_id)['percent'])
+            self_.progress_item_index = 2
+            self_.progress_hook(50, 100)
+            seen.append(self.service.jobs.get(job_id)['percent'])
+            return str(self.service.download_dir / 'x.mp4')
+
+        with mock.patch('parth_dl.server.InstagramDownloader.download', fake_download):
+            job_id = self.service.start_download('https://www.instagram.com/p/A/')
+            self.wait_for_job(job_id)
+
+        self.assertEqual(seen, [50, 75])
+
+    def test_queued_job_can_be_cancelled(self):
+        gate = threading.Event()
+        calls = []
+
+        def fake_download(self_, url, output_path=None, quality='best'):
+            calls.append(url)
+            gate.wait(2)
+            return str(self.service.download_dir / 'x.mp4')
+
+        with mock.patch('parth_dl.server.InstagramDownloader.download', fake_download):
+            first = self.service.start_download('https://www.instagram.com/p/A/')
+            self.wait_for_state(first, 'running')
+            second = self.service.start_download('https://www.instagram.com/p/B/')
+
+            cancelled = self.service.cancel(second)
+            self.assertEqual(cancelled['state'], 'cancelled')
+            gate.set()
+            self.wait_for_job(first)
+            self.wait_for_job(second)
+
+        self.assertEqual(len(calls), 1)
+
+    def test_running_job_can_be_cancelled_and_retried(self):
+        gate = threading.Event()
+        entered = threading.Event()
+        attempts = 0
+
+        def fake_download(self_, url, output_path=None, quality='best'):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                entered.set()
+                gate.wait(2)
+                self_.progress_hook(1, 100)
+            return str(self.service.download_dir / 'x.mp4')
+
+        with mock.patch('parth_dl.server.InstagramDownloader.download', fake_download):
+            first = self.service.start_download('https://www.instagram.com/p/A/')
+            self.assertTrue(entered.wait(2))
+            self.service.cancel(first)
+            gate.set()
+            cancelled = self.wait_for_job(first)
+            self.assertEqual(cancelled['state'], 'cancelled')
+
+            retried = self.service.retry(first)
+            completed = self.wait_for_job(retried)
+
+        self.assertEqual(completed['state'], 'done')
+        self.assertEqual(attempts, 2)
+
+    def test_existing_file_is_reported_as_already_downloaded(self):
+        target = self.service.download_dir / 'existing.mp4'
+        target.write_bytes(b'already here')
+
+        def fake_download(self_, url, output_path=None, quality='best'):
+            self_.last_skipped_files = [str(target)]
+            return []
+
+        with mock.patch('parth_dl.server.InstagramDownloader.download', fake_download):
+            job_id = self.service.start_download('https://www.instagram.com/p/A/')
+            job = self.wait_for_job(job_id)
+
+        self.assertEqual(job['message'], 'Already downloaded')
+        self.assertTrue(job['files'][0]['existing'])
+        self.assertEqual(job['files'][0]['path'], str(target.resolve()))
+
+    def test_recent_jobs_endpoint_restores_history(self):
+        target = self.service.download_dir / 'x.mp4'
+
+        with mock.patch(
+            'parth_dl.server.InstagramDownloader.download', return_value=str(target),
+        ):
+            _, body = self.request(
+                '/api/download', 'POST',
+                {'url': 'https://www.instagram.com/p/A/'},
+            )
+            self.wait_for_job(body['job_id'])
+
+        status, history = self.request('/api/jobs')
+        self.assertEqual(status, 200)
+        self.assertEqual(history['jobs'][0]['id'], body['job_id'])
+
+    def test_cancel_and_retry_http_endpoints(self):
+        gate = threading.Event()
+        entered = threading.Event()
+
+        def fake_download(self_, url, output_path=None, quality='best'):
+            if url.endswith('/A/'):
+                entered.set()
+                gate.wait(2)
+            return str(self.service.download_dir / 'x.mp4')
+
+        with mock.patch('parth_dl.server.InstagramDownloader.download', fake_download):
+            first = self.service.start_download('https://www.instagram.com/p/A/')
+            self.assertTrue(entered.wait(2))
+            _, queued = self.request(
+                '/api/download', 'POST',
+                {'url': 'https://www.instagram.com/p/B/'},
+            )
+
+            status, cancelled = self.request(
+                f"/api/jobs/{queued['job_id']}/cancel", 'POST', {},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(cancelled['state'], 'cancelled')
+
+            status, retried = self.request(
+                f"/api/jobs/{queued['job_id']}/retry", 'POST', {},
+            )
+            self.assertEqual(status, 202)
+
+            gate.set()
+            self.wait_for_job(first)
+            completed = self.wait_for_job(retried['job_id'])
+
+        self.assertEqual(completed['state'], 'done')
+
 
 class SecurityTest(ServerTestCase):
 
@@ -270,18 +512,45 @@ class SecurityTest(ServerTestCase):
 
         self.assertEqual(status, 400)
 
+    def test_malformed_content_length_is_rejected(self):
+        handler = object.__new__(Handler)
+        handler.headers = {'Content-Length': 'not-a-number'}
+        handler.rfile = io.BytesIO(b'{}')
+
+        self.assertIsNone(handler._read_json())
+
+    def test_remote_binding_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            serve(
+                host='0.0.0.0',
+                download_dir=self.tmpdir / 'remote',
+                open_browser=False,
+            )
+
 
 class JobStoreTest(ServerTestCase):
 
     def test_history_is_bounded(self):
         store = self.service.jobs
         first = store.create('url-0')
+        store.update(first, state='done')
 
         for i in range(store.MAX_JOBS + 5):
-            store.create(f'url-{i}')
+            job_id = store.create(f'url-{i}')
+            store.update(job_id, state='done')
 
         # The oldest jobs are evicted, so a long-lived server cannot grow forever
         self.assertIsNone(store.get(first))
+
+    def test_running_jobs_are_never_evicted(self):
+        store = self.service.jobs
+        running = store.create('still-running')
+
+        for i in range(store.MAX_JOBS + 5):
+            job_id = store.create(f'done-{i}')
+            store.update(job_id, state='done')
+
+        self.assertIsNotNone(store.get(running))
 
 
 if __name__ == '__main__':

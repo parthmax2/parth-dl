@@ -6,8 +6,10 @@ Security-focused with yt-dlp-inspired reliability
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
+import urllib.parse
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
@@ -31,6 +33,11 @@ class NetworkError(DownloadError):
 
 class ValidationError(DownloadError):
     """Raised on invalid input"""
+    pass
+
+
+class ExpiredMediaError(DownloadError):
+    """Raised when an extracted CDN URL has expired and must be refreshed"""
     pass
 
 
@@ -63,6 +70,7 @@ _UNICODE_SYMBOLS = {
     'ok': '✓', 'fail': '✗', 'warn': '⚠',
     'audio': '🔊', 'muted': '🔇',
     'bar_full': '█', 'bar_empty': '░',
+    'step': '◆', 'line': '─',
     'tl': '╔', 'tr': '╗', 'bl': '╚', 'br': '╝', 'h': '═', 'v': '║',
 }
 
@@ -70,6 +78,7 @@ _ASCII_SYMBOLS = {
     'ok': '+', 'fail': 'x', 'warn': '!',
     'audio': '+', 'muted': '-',
     'bar_full': '#', 'bar_empty': '-',
+    'step': '>', 'line': '-',
     'tl': '+', 'tr': '+', 'bl': '+', 'br': '+', 'h': '=', 'v': '|',
 }
 
@@ -77,6 +86,45 @@ _ASCII_SYMBOLS = {
 def symbols(stream=None):
     """Return the symbol table appropriate for the given output stream"""
     return _UNICODE_SYMBOLS if supports_unicode(stream) else _ASCII_SYMBOLS
+
+
+def supports_color(stream=None):
+    """Return whether ANSI styling is appropriate for this terminal."""
+    stream = stream or sys.stdout
+    if os.environ.get('NO_COLOR') is not None:
+        return False
+    if not hasattr(stream, 'isatty') or not stream.isatty():
+        return False
+    if os.environ.get('TERM') == 'dumb':
+        return False
+    if os.name == 'nt':
+        return bool(
+            os.environ.get('WT_SESSION')
+            or os.environ.get('TERM_PROGRAM')
+            or os.environ.get('ANSICON')
+        )
+    return True
+
+
+_ANSI = {
+    'reset': '\033[0m',
+    'bold': '\033[1m',
+    'dim': '\033[2m',
+    'purple': '\033[38;5;183m',
+    'blue': '\033[38;5;117m',
+    'green': '\033[38;5;77m',
+    'orange': '\033[38;5;215m',
+    'red': '\033[38;5;203m',
+    'track': '\033[38;5;238m',
+}
+
+
+def style(text, *names, stream=None):
+    """Apply ANSI styles only when the destination supports them."""
+    if not supports_color(stream):
+        return str(text)
+    prefix = ''.join(_ANSI[name] for name in names)
+    return f"{prefix}{text}{_ANSI['reset']}"
 
 
 def supports_hyperlinks(stream=None):
@@ -147,26 +195,31 @@ class RateLimiter:
         self.max_requests = max_requests
         self.time_window = time_window
         self.requests = []
+        self._lock = threading.Lock()
 
     def _prune(self, now):
         self.requests = [t for t in self.requests if now - t < self.time_window]
 
     def wait_if_needed(self):
         """Block if rate limit would be exceeded"""
-        now = time.time()
-        self._prune(now)
-
-        if len(self.requests) >= self.max_requests:
-            oldest_request = min(self.requests)
-            wait_time = self.time_window - (now - oldest_request)
-
-            if wait_time > 0:
-                time.sleep(wait_time + 0.1)  # Small buffer
-
+        # One limiter is shared by every extractor and transfer in a session.
+        # Holding the lock while waiting prevents a burst of worker threads from
+        # all observing the same free slot and exceeding the configured window.
+        with self._lock:
             now = time.time()
-            self._prune(now)  # Drop only what actually aged out
+            self._prune(now)
 
-        self.requests.append(now)
+            if len(self.requests) >= self.max_requests:
+                oldest_request = min(self.requests)
+                wait_time = self.time_window - (now - oldest_request)
+
+                if wait_time > 0:
+                    time.sleep(wait_time + 0.1)  # Small buffer
+
+                now = time.time()
+                self._prune(now)
+
+            self.requests.append(now)
 
 
 class ExponentialBackoff:
@@ -479,46 +532,48 @@ def extract_instagram_id(url):
     Extract Instagram post/reel shortcode from URL
     Supports various URL formats
     """
-    # Remove query parameters and fragments
-    url = url.split('?')[0].split('#')[0]
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except (TypeError, ValueError):
+        return None
 
-    patterns = [
-        # Standard formats: /p/, /tv/, /reel/, /reels/
-        r'instagram\.com/(?:p|tv|reel|reels)/([A-Za-z0-9_-]+)',
-        # Username with post: /username/p/CODE/
-        r'instagram\.com/[^/]+/(?:p|reel|reels)/([A-Za-z0-9_-]+)',
-        # Stories (for future support)
-        r'instagram\.com/stories/[^/]+/([A-Za-z0-9_-]+)',
-    ]
+    if (parsed.hostname or '').lower() not in ('instagram.com', 'www.instagram.com'):
+        return None
 
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split('/') if part]
+    if len(parts) >= 2 and parts[0].lower() in ('p', 'tv', 'reel', 'reels'):
+        shortcode = parts[1]
+    elif len(parts) >= 3 and parts[1].lower() in ('p', 'reel', 'reels'):
+        shortcode = parts[2]
+    else:
+        # Stories are intentionally not treated as posts. Their numeric media
+        # IDs are not post shortcodes and routing them through /p/ can fetch the
+        # wrong resource.
+        return None
 
-    return None
+    return shortcode if re.fullmatch(r'[A-Za-z0-9_-]+', shortcode) else None
 
 
 def extract_username(url):
     """Extract Instagram username from URL"""
-    # Remove query parameters
-    url = url.split('?')[0]
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except (TypeError, ValueError):
+        return None
 
-    # Match /@username or /username (but not /p/, /reel/, etc.)
-    patterns = [
-        r'instagram\.com/@([A-Za-z0-9_.]+)/?$',
-        r'instagram\.com/([A-Za-z0-9_.]+)/?$',
-    ]
+    if (parsed.hostname or '').lower() not in ('instagram.com', 'www.instagram.com'):
+        return None
 
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            username = match.group(1)
-            # Exclude reserved paths
-            if username not in ['p', 'reel', 'reels', 'tv', 'stories', 'explore', 'accounts']:
-                return username
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split('/') if part]
+    if len(parts) != 1:
+        return None
 
-    return None
+    username = parts[0][1:] if parts[0].startswith('@') else parts[0]
+    if not re.fullmatch(r'[A-Za-z0-9_.]+', username):
+        return None
+
+    reserved = {'p', 'reel', 'reels', 'tv', 'stories', 'explore', 'accounts'}
+    return username if username.lower() not in reserved else None
 
 
 def is_profile_url(url):
@@ -532,7 +587,7 @@ def is_media_url(url):
 
 
 class ProgressBar:
-    """Simple progress bar for downloads"""
+    """Compact two-line progress display with a plain-terminal fallback."""
 
     RENDER_INTERVAL = 0.1  # seconds between redraws
 
@@ -545,7 +600,9 @@ class ProgressBar:
         self.stream = stream or sys.stdout
         self.symbols = symbols(self.stream)
         self.enabled = self.stream.isatty()
+        self.color = supports_color(self.stream)
         self._last_render = 0.0
+        self._rendered = False
 
     def update(self, chunk_size):
         """Update progress, redrawing at most every RENDER_INTERVAL"""
@@ -570,14 +627,40 @@ class ProgressBar:
         remaining = self.total_size - self.downloaded
         eta = format_duration(remaining / speed) if speed > 0 and remaining > 0 else "00:00"
 
-        bar_length = 40
+        try:
+            import shutil
+            columns = shutil.get_terminal_size((80, 20)).columns
+        except OSError:
+            columns = 80
+        bar_length = max(18, min(54, columns - 8))
         filled = int(bar_length * fraction)
-        bar = self.symbols['bar_full'] * filled + self.symbols['bar_empty'] * (bar_length - filled)
+        full = self.symbols['bar_full'] * filled
+        empty = self.symbols['bar_empty'] * (bar_length - filled)
+        bar = style(full, 'green', stream=self.stream) + style(
+            empty, 'track', stream=self.stream,
+        )
+        metrics = (
+            f"{format_size(self.downloaded)} / {format_size(self.total_size)}"
+            f"  ·  {format_size(speed)}/s"
+            f"  ·  {eta} left"
+        )
 
-        print(f'\r{self.desc}: |{bar}| {percent:5.1f}% '
-              f'{format_size(self.downloaded)}/{format_size(self.total_size)} '
-              f'@ {format_size(speed)}/s ETA {eta}',
-              end='', flush=True, file=self.stream)
+        if self.color:
+            if self._rendered:
+                print('\033[1A\r', end='', file=self.stream)
+            print(f"\r\033[2K  {bar}", file=self.stream)
+            print(
+                f"\r\033[2K  {style(metrics, 'dim', stream=self.stream)}",
+                end='', flush=True, file=self.stream,
+            )
+            self._rendered = True
+            return
+
+        plain_bar = full + empty
+        print(
+            f'\r{self.desc}: |{plain_bar}| {percent:5.1f}% {metrics}',
+            end='', flush=True, file=self.stream,
+        )
 
     def finish(self):
         """Complete the progress bar"""

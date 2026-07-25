@@ -6,6 +6,7 @@ them - so each one is pinned to the exception that produces it.
 """
 
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -109,6 +110,52 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(code, EXIT_USAGE)
         self.assertIn('cannot be combined', err)
 
+    def test_json_rejects_multiple_urls(self):
+        code, _, err = run_main([
+            '--json',
+            'https://www.instagram.com/p/Cxyz123AbCd/',
+            'https://www.instagram.com/p/Dxyz123AbCd/',
+        ])
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn('exactly one URL', err)
+
+    def test_interactive_rejects_single_output_filename(self):
+        code, _, err = run_main([
+            '-i', '-o', 'clip.mp4',
+            'https://www.instagram.com/p/Cxyz123AbCd/',
+        ], stdin_tty=True, stdout_tty=True)
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn('cannot be used', err)
+
+    def test_output_and_paths_are_mutually_exclusive(self):
+        with self.assertRaises(SystemExit) as raised:
+            run_main([
+                '-o', 'clip.mp4', '-P', 'downloads',
+                'https://www.instagram.com/p/Cxyz123AbCd/',
+            ])
+
+        self.assertEqual(raised.exception.code, EXIT_USAGE)
+
+    def test_quiet_and_verbose_are_mutually_exclusive(self):
+        with self.assertRaises(SystemExit) as raised:
+            run_main([
+                '--quiet', '--verbose',
+                'https://www.instagram.com/p/Cxyz123AbCd/',
+            ])
+
+        self.assertEqual(raised.exception.code, EXIT_USAGE)
+
+    def test_cli_passes_explicit_output_modes(self):
+        with mock.patch.object(cli.InstagramDownloader, 'download', return_value='x') as dl:
+            run_main(['-o', 'clip', 'https://www.instagram.com/p/Cxyz123AbCd/'])
+            self.assertEqual(dl.call_args.kwargs['output_mode'], 'file')
+
+        with mock.patch.object(cli.InstagramDownloader, 'download', return_value='x') as dl:
+            run_main(['-P', 'downloads.v1', 'https://www.instagram.com/p/Cxyz123AbCd/'])
+            self.assertEqual(dl.call_args.kwargs['output_mode'], 'directory')
+
 
 class BatchFileTest(unittest.TestCase):
 
@@ -135,6 +182,15 @@ class BatchFileTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             cli.read_batch_file('no-such-file.txt')
 
+    def test_invalid_utf8_is_reported_as_usage_error(self):
+        path = Path(tempfile.mkdtemp()) / 'urls.txt'
+        path.write_bytes(b'\xff\xfe\xfa')
+
+        code, _, err = run_main(['-a', str(path)])
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn('Could not read batch file', err)
+
     def test_batch_file_urls_are_downloaded(self):
         path = self.write('https://www.instagram.com/p/Cxyz123AbCd/\n')
 
@@ -157,6 +213,19 @@ class BannerTest(unittest.TestCase):
         self.assertNotIn('parth-dl v', out)
         self.assertTrue(out.strip().startswith('{'))   # clean JSON, parseable as-is
 
+    def test_verbose_json_keeps_diagnostics_on_stderr(self):
+        with mock.patch(
+            'parth_dl.core.MediaExtractor.extract', return_value={'id': 'x'},
+        ):
+            code, out, err = run_main([
+                '--json', '--verbose',
+                'https://www.instagram.com/p/Cxyz123AbCd/',
+            ])
+
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(json.loads(out), {'id': 'x'})
+        self.assertIn('Detected media URL', err)
+
     def test_suppressed_when_piped(self):
         with mock.patch.object(cli.InstagramDownloader, 'download', return_value='x.mp4'):
             _, out, _ = run_main(['https://www.instagram.com/reel/Cxyz123AbCd/'],
@@ -170,6 +239,10 @@ class BannerTest(unittest.TestCase):
                                  stdout_tty=True)
 
         self.assertIn('Instagram Media Downloader', out)
+        self.assertIn('Developed by Parthmax', out)
+        self.assertIn('parth-dl', out)
+        self.assertNotIn('╔', out)
+        self.assertNotIn('(Public Content Only)', out)
 
 
 class InteractiveTest(unittest.TestCase):
@@ -236,6 +309,13 @@ class ServeDispatchTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(serve.call_args.kwargs['port'], 9999)
         self.assertFalse(serve.call_args.kwargs['open_browser'])
+
+    def test_server_startup_failure_is_reported_without_traceback(self):
+        with mock.patch.object(cli, 'run_serve', side_effect=OSError('port in use')):
+            code, _, err = run_main(['serve', '--no-open'])
+
+        self.assertEqual(code, EXIT_DOWNLOAD_ERROR)
+        self.assertIn('could not start server: port in use', err)
 
 
 if __name__ == '__main__':

@@ -2,6 +2,9 @@
 include README.md
 include LICENSE
 include CHANGELOG.md
+include cli.gif
+recursive-include docs *.md
+recursive-include scripts *.py
 
 # Web UI served by `parth-dl serve`
 recursive-include parth_dl/web *.html

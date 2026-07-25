@@ -21,24 +21,21 @@ from .utils import (
     RateLimitError,
     ValidationError,
     harden_stdio,
+    style,
     symbols,
 )
 
 
 def print_banner():
-    """Print application banner"""
-    sym = symbols()
-    title = f"parth-dl v{__version__}"
-    lines = [title, "Instagram Media Downloader", "(Public Content Only)"]
-
-    width = 63
-    horizontal = sym['h'] * width
-
+    """Print a compact terminal-native identity block."""
     print()
-    print(f"{sym['tl']}{horizontal}{sym['tr']}")
-    for line in lines:
-        print(f"{sym['v']}{line.center(width)}{sym['v']}")
-    print(f"{sym['bl']}{horizontal}{sym['br']}")
+    brand = style('parth-dl', 'bold', 'purple')
+    version = style(f'v{__version__}', 'dim')
+    subtitle = style('Instagram Media Downloader · public content', 'dim')
+    credit = style('Developed by Parthmax', 'dim')
+    print(f"{brand}  {version}")
+    print(subtitle)
+    print(credit)
     print()
 
 
@@ -103,13 +100,14 @@ Note: This tool only works with PUBLIC Instagram content.
         help='File containing URLs to download, one per line (# comments allowed)'
     )
 
-    parser.add_argument(
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
         '-o', '--output',
         metavar='PATH',
         help='Output filename (single item) - use -P for a destination directory'
     )
 
-    parser.add_argument(
+    output_group.add_argument(
         '-P', '--paths',
         metavar='DIR',
         help='Directory to download into (created if it does not exist)'
@@ -134,13 +132,14 @@ Note: This tool only works with PUBLIC Instagram content.
         help='Keep prompting for the next URL after each download'
     )
 
-    parser.add_argument(
+    verbosity_group = parser.add_mutually_exclusive_group()
+    verbosity_group.add_argument(
         '-v', '--verbose',
         action='store_true',
         help='Enable verbose/debug output'
     )
 
-    parser.add_argument(
+    verbosity_group.add_argument(
         '--quiet',
         action='store_true',
         help='Suppress all output except errors'
@@ -185,7 +184,7 @@ def read_batch_file(path):
     try:
         with open(path, encoding='utf-8') as f:
             lines = f.read().splitlines()
-    except OSError as e:
+    except (OSError, UnicodeError) as e:
         raise ValidationError(f"Could not read batch file: {e}")
 
     return [line.strip() for line in lines
@@ -214,8 +213,11 @@ def run_one(downloader, url, args):
         else:
             downloader.download(
                 url=url,
-                output_path=args.output or args.paths,
+                output_path=args.output if args.output is not None else args.paths,
                 quality=args.quality,
+                output_mode='file' if args.output is not None else (
+                    'directory' if args.paths is not None else 'auto'
+                ),
             )
         return EXIT_OK
 
@@ -281,7 +283,14 @@ def main():
     # `serve` is a subcommand, but the main parser takes bare positional URLs,
     # so it has to be peeled off before argparse sees it.
     if len(sys.argv) > 1 and sys.argv[1] == 'serve':
-        return run_serve(sys.argv[2:])
+        try:
+            return run_serve(sys.argv[2:])
+        except ValidationError as e:
+            print(f"[parth-dl] error: {e}", file=sys.stderr)
+            return EXIT_USAGE
+        except Exception as e:
+            print(f"[parth-dl] error: could not start server: {e}", file=sys.stderr)
+            return EXIT_DOWNLOAD_ERROR
 
     parser = create_parser()
     args = parser.parse_args()
@@ -297,6 +306,16 @@ def main():
     if args.interactive and (args.dump_json or args.list_formats):
         print(f"[parth-dl] {sym['fail']} -i/--interactive cannot be combined with "
               f"--json or --list-formats", file=sys.stderr)
+        return EXIT_USAGE
+
+    if args.dump_json and len(urls) != 1:
+        print(f"[parth-dl] {sym['fail']} --json requires exactly one URL",
+              file=sys.stderr)
+        return EXIT_USAGE
+
+    if args.interactive and args.output:
+        print(f"[parth-dl] {sym['fail']} -o/--output cannot be used with "
+              f"-i/--interactive; use -P/--paths instead", file=sys.stderr)
         return EXIT_USAGE
 
     # `parth-dl -i` with no URLs is legitimate: it drops straight into the prompt

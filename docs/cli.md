@@ -1,5 +1,8 @@
 # CLI reference
 
+For local setup, testing, and contributor workflow, see
+[development.md](development.md).
+
 ```bash
 parth-dl [URL ...] [options]
 parth-dl serve [options]
@@ -10,8 +13,8 @@ parth-dl serve [options]
 | Flag | Meaning |
 |---|---|
 | `-a`, `--batch-file FILE` | Read URLs from a file, one per line. `#` comments and blank lines are ignored. |
-| `-o`, `--output PATH` | Output filename. Cannot be used with multiple URLs. |
-| `-P`, `--paths DIR` | Directory to download into; created if missing. |
+| `-o`, `--output PATH` | Exact output filename. Cannot be combined with `-P`, multiple URLs, or `-i`. |
+| `-P`, `--paths DIR` | Directory to download into; created if missing. Cannot be combined with `-o`. |
 | `-q`, `--quality {best,worst}` | Rendition to pick. Default `best`. |
 | `-f`, `--force` | Overwrite existing files. Default is to skip them. |
 | `-i`, `--interactive` | Keep prompting for the next URL after each download. |
@@ -19,7 +22,7 @@ parth-dl serve [options]
 | `--quiet` | Suppress everything except errors. |
 | `--no-banner` | Don't print the banner. |
 | `--list-formats` | Show every available rendition; download nothing. |
-| `--json` | Print the [metadata](schema.md) as JSON; download nothing. |
+| `--json` | Print one URL's [metadata](schema.md) as one JSON document; download nothing. |
 | `--no-rate-limit` | Disable rate limiting. Not recommended — this is what gets you blocked. |
 | `--version` | Print the version. |
 
@@ -30,7 +33,7 @@ parth-dl serve [options]
 parth-dl https://www.instagram.com/reel/Cxyz123AbCd/
 
 # Profile picture
-parth-dl https://www.instagram.com/parthmax_/
+parth-dl https://www.instagram.com/parthmax/
 
 # Several at once
 parth-dl https://www.instagram.com/p/AAA/ https://www.instagram.com/p/BBB/
@@ -54,10 +57,13 @@ don't re-run the command for every video:
 $ parth-dl -i
 
 [parth-dl] Next URL (press Enter to quit) > https://www.instagram.com/reel/Cxyz123AbCd/
-...
-✓ Download complete!
-Files saved: 1
-  - parthmax_-Cxyz123AbCd.mp4        ← clickable
+◆ resolving reel Cxyz123AbCd  done
+◆ fetching media metadata  done
+◆ downloading video
+✓ saved  downloads/parthmax-Cxyz123AbCd.mp4
+  video · 720x1280 · audio
+
+1 file · 4.21 MB · 2.4s
 
 [parth-dl] Next URL (press Enter to quit) >
 ```
@@ -67,7 +73,8 @@ is still reflected in the final exit code.
 
 Interactive mode is ignored when stdin or stdout is not a terminal, so it can never
 hang a script that pipes into parth-dl. It cannot be combined with `--json` or
-`--list-formats`.
+`--list-formats`. Use `-P` rather than `-o` in interactive mode so every URL gets
+its own deterministic filename.
 
 ## Clickable links
 
@@ -78,10 +85,11 @@ to always print plain paths.
 
 ## Resuming
 
-Interrupted downloads are kept as `.part` files and resumed on the next run. A file is
-only given its final name once every byte has arrived, so a partial download can never
-be mistaken for a complete one. If the server rejects the resume, parth-dl silently
-starts over.
+Interrupted downloads are kept as `.part` files with a small `.part.json` provenance
+record and resumed on the next run. A partial is resumed only when it belongs to the
+same CDN source; the returned `Content-Range` must begin at the exact expected byte.
+A file is only given its final name once every byte has arrived. If any resume check
+fails, parth-dl safely starts over.
 
 ## Exit codes
 
@@ -114,3 +122,8 @@ first failure.
 
 Stories, highlights, private accounts, and listing a user's posts. All of them require
 authentication. A profile URL downloads the profile picture only.
+
+Public reels are requested through Instagram's current logged-out Polaris flow when
+the lightweight embed response contains only a cover image. This does not require
+browser cookies or an Instagram login. Instagram can still rate-limit anonymous
+clients; keep the default rate limiter enabled.

@@ -1,133 +1,294 @@
-# HTTP API
+# Local HTTP API Usage - Instagram Downloader JSON API
 
-`parth-dl serve` starts a local JSON API and web UI, so **any** app — Node, Go, PHP,
-Rust, a browser — can drive the downloader without shelling out or writing Python.
+`parth-dl serve` starts a local Instagram downloader API that any app can call over
+HTTP. Use it when your project is written in Node.js, Go, PHP, Rust, a browser, a
+desktop app, or another language, but you still want parth-dl's downloader engine.
+
+The server also hosts the built-in web UI. For the browser interface, read
+[Web UI Usage](web-ui.md).
+
+## Start The Server
 
 ```bash
-parth-dl serve                  # http://127.0.0.1:8000, opens your browser
-parth-dl serve --port 9000 --dir ~/Videos --no-open
+parth-dl serve
 ```
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--host` | `127.0.0.1` | Interface to bind. See [Security](#security) before changing. |
-| `--port` | `8000` | Port to listen on. |
-| `--dir` | `./downloads` | Where files are written. |
-| `--no-open` | off | Don't open a browser on start. |
-| `-v` | off | Log every request. |
+Default address:
 
-## Endpoints
+```text
+http://127.0.0.1:8000
+```
+
+Custom port and download folder:
+
+```bash
+parth-dl serve --port 9000 --dir ~/Videos/instagram --no-open
+```
+
+## Server Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host` | `127.0.0.1` | Loopback host. Use `127.0.0.1`, `localhost`, or `::1`. |
+| `--port` | `8000` | Port for the local API and web UI. |
+| `--dir` | `./downloads` | Folder where downloaded files are saved. |
+| `--no-open` | off | Do not open the browser automatically. |
+| `-v`, `--verbose` | off | Print verbose request and extraction logs. |
+
+## API Flow
+
+Most apps use this flow:
+
+1. `POST /api/info` to validate the URL and show metadata.
+2. `POST /api/download` to enqueue the download.
+3. `GET /api/jobs/{id}` every few hundred milliseconds until the job finishes.
+4. Read the server-side file path from `files[].path`, or fetch a browser copy from
+   `files[].url`.
+
+## Health Check
 
 ### `GET /api/health`
 
 ```bash
-curl localhost:8000/api/health
-# {"ok": true, "version": "1.1.0"}
+curl http://127.0.0.1:8000/api/health
 ```
 
-### `POST /api/info`
-
-Metadata, no download. The body is the [metadata schema](schema.md).
-
-```bash
-curl -X POST localhost:8000/api/info \
-  -H 'Content-Type: application/json' \
-  -d '{"url": "https://www.instagram.com/reel/Cxyz123AbCd/"}'
-```
-
-### `POST /api/download`
-
-Starts a job and returns immediately with `202`.
-
-```bash
-curl -X POST localhost:8000/api/download \
-  -H 'Content-Type: application/json' \
-  -d '{"url": "https://www.instagram.com/reel/Cxyz123AbCd/", "quality": "best"}'
-# {"job_id": "3f9a...e21"}
-```
-
-`quality` is `best` (default) or `worst`.
-
-### `GET /api/jobs/{id}`
-
-Poll for progress.
+Example response:
 
 ```json
 {
-  "id": "3f9a...e21",
+  "ok": true,
+  "version": "1.2.0",
+  "download_dir": "/absolute/path/downloads"
+}
+```
+
+## Get Metadata
+
+### `POST /api/info`
+
+Returns media metadata without downloading. The response follows the
+[Metadata Schema](schema.md).
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/info \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.instagram.com/reel/Cxyz123AbCd/\"}"
+```
+
+A successful info response is cached briefly and reused by the next
+`POST /api/download` for the same URL. This avoids extracting the same Instagram page
+twice in the common preview-then-download flow.
+
+## Start A Download
+
+### `POST /api/download`
+
+Starts a queued download job and returns immediately with HTTP `202`.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/download \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.instagram.com/reel/Cxyz123AbCd/\",\"quality\":\"best\"}"
+```
+
+Example response:
+
+```json
+{
+  "job_id": "3f9a0c2f6e214d48"
+}
+```
+
+`quality` can be:
+
+| Value | Meaning |
+|---|---|
+| `best` | Highest available format. This is the default. |
+| `worst` | Smallest available format. Useful for previews or low storage. |
+
+## List Recent Jobs
+
+### `GET /api/jobs`
+
+```bash
+curl http://127.0.0.1:8000/api/jobs
+```
+
+Returns the newest queued, running, completed, cancelled, and failed jobs:
+
+```json
+{
+  "jobs": [
+    {
+      "id": "3f9a0c2f6e214d48",
+      "url": "https://www.instagram.com/reel/Cxyz123AbCd/",
+      "state": "running",
+      "percent": 62
+    }
+  ]
+}
+```
+
+The server keeps a bounded history of recent jobs so the web UI can restore cards after
+a refresh. History is not persisted across server restarts.
+
+## Poll Job Progress
+
+### `GET /api/jobs/{id}`
+
+```bash
+curl http://127.0.0.1:8000/api/jobs/3f9a0c2f6e214d48
+```
+
+Example running response:
+
+```json
+{
+  "id": "3f9a0c2f6e214d48",
   "url": "https://www.instagram.com/reel/Cxyz123AbCd/",
+  "quality": "best",
   "state": "running",
   "percent": 62,
+  "current_item": 1,
+  "total_items": 1,
+  "queue_position": null,
+  "message": "Downloading video",
   "files": [],
   "error": null
 }
 ```
 
-`state` is `running`, `done`, or `error`.
+Possible states:
 
-- **`percent` is `-1`** when the CDN sends no `Content-Length`. Show an indeterminate
-  spinner, not `0%`.
-- On `done`, `files` is `[{"name": "clip.mp4", "url": "/files/clip.mp4"}]`.
-- On `error`, `error` holds the message.
+| State | Meaning |
+|---|---|
+| `queued` | Waiting for a worker. Check `queue_position`. |
+| `running` | Download is active. Check `percent` and `message`. |
+| `done` | Download finished. Check `files`. |
+| `cancelled` | Job was cancelled. It can be retried. |
+| `error` | Job failed. Check `error`. |
 
-Job history is capped at the 100 most recent, so a long-running server can't grow
-without bound. Poll and consume promptly.
+Example completed response:
+
+```json
+{
+  "id": "3f9a0c2f6e214d48",
+  "state": "done",
+  "message": "Download complete",
+  "files": [
+    {
+      "name": "parthmax-Cxyz123AbCd.mp4",
+      "path": "/absolute/path/downloads/parthmax-Cxyz123AbCd.mp4",
+      "url": "/files/parthmax-Cxyz123AbCd.mp4",
+      "existing": false
+    }
+  ],
+  "error": null
+}
+```
+
+Use `files[].path` when your app runs on the same machine as the server. Use
+`files[].url` when a browser needs to download a separate copy.
+
+## Cancel A Job
+
+### `POST /api/jobs/{id}/cancel`
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/jobs/3f9a0c2f6e214d48/cancel \
+  -H "Content-Type: application/json" \
+  -d "{}"
+```
+
+Queued jobs cancel immediately. Running jobs cancel cooperatively. Partial `.part`
+files are kept so a future download can resume when possible.
+
+## Retry A Job
+
+### `POST /api/jobs/{id}/retry`
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/jobs/3f9a0c2f6e214d48/retry \
+  -H "Content-Type: application/json" \
+  -d "{}"
+```
+
+Returns a new `job_id` using the original URL and quality.
+
+## Download A Browser Copy
 
 ### `GET /files/{name}`
 
-Downloads a completed file. Only serves files directly inside `--dir`.
+```bash
+curl -L -o reel.mp4 http://127.0.0.1:8000/files/parthmax-Cxyz123AbCd.mp4
+```
 
-## Errors
+This endpoint serves files directly inside the configured `--dir`. It cannot escape the
+download directory.
 
-Errors are `{"error": "message"}` with a status you can branch on — you never have to
-parse the message:
+## Error Responses
 
-| Status | Means |
+Errors are JSON:
+
+```json
+{
+  "error": "message"
+}
+```
+
+Branch on HTTP status codes instead of parsing messages.
+
+| Status | Meaning |
 |---|---|
-| `400` | Bad request: not an instagram.com URL, malformed body, bad `quality`. |
-| `403` | Forbidden: path traversal, or a non-loopback `Host` header. |
-| `404` | Content is private, deleted, or unsupported. Also: unknown route or job. |
-| `429` | Instagram is rate limiting. Back off. |
-| `502` | The transfer failed upstream after retries. |
+| `400` | Bad request, malformed JSON, unsupported URL, or invalid quality. |
+| `403` | Forbidden host header or unsafe file request. |
+| `404` | Unknown route/job, or Instagram content is private/deleted/unsupported. |
+| `429` | Instagram is throttling requests. Wait before retrying. |
+| `502` | Upstream transfer failed after retries. |
+| `503` | Download queue is full. Try again later. |
 
-## Example: Node.js
+## Node.js Example
 
 ```js
 const BASE = "http://127.0.0.1:8000";
 
-async function download(url) {
-  const res = await fetch(`${BASE}/api/download`, {
+async function request(path, options) {
+  const response = await fetch(`${BASE}${path}`, options);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+  return body;
+}
+
+async function downloadInstagram(url) {
+  const { job_id } = await request("/api/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, quality: "best" }),
   });
-  if (!res.ok) throw new Error((await res.json()).error);
 
-  const { job_id } = await res.json();
+  while (true) {
+    const job = await request(`/api/jobs/${job_id}`);
 
-  for (;;) {
-    const job = await (await fetch(`${BASE}/api/jobs/${job_id}`)).json();
     if (job.state === "done") return job.files;
     if (job.state === "error") throw new Error(job.error);
-    await new Promise((r) => setTimeout(r, 400));
+    if (job.state === "cancelled") throw new Error(job.message || "cancelled");
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }
 ```
 
-## Security
+## Security Notes
 
-The server **fetches URLs on your behalf**, so it is deliberately locked down:
+The server is intentionally local-first:
 
-- **Loopback only by default.** It binds `127.0.0.1`.
-- **The `Host` header must be loopback.** This blocks DNS rebinding — without it, a
-  website you happen to visit could point a hostname at `127.0.0.1` and drive your
-  downloader.
-- **No CORS header.** Cross-origin JavaScript can fire requests but cannot read the
-  responses.
-- **`/files/` cannot escape the download directory.**
-- **Media URLs are host-allowlisted.** The downloader will only fetch from Instagram's
-  own CDNs, never an arbitrary host.
+- It binds to loopback by default.
+- It rejects non-loopback `Host` headers to reduce DNS rebinding risk.
+- It does not send permissive CORS headers.
+- `/files/` cannot serve paths outside the download directory.
+- Media redirects are validated before download.
+- The queue is bounded and uses one shared rate limiter.
 
-Passing `--host 0.0.0.0` disables the loopback check and exposes the server to your
-network — **anyone who can reach the port can then download through your IP address.**
-There is no authentication. Don't do it on an untrusted network.
+Do not expose `parth-dl serve` directly to the public internet. Put your own auth,
+queueing, validation, and abuse controls in front of it if you build a hosted service.

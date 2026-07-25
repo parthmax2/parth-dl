@@ -5,18 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "parth-dl"
 dynamic = ["version"]
-description = "Fast and developer-friendly Instagram media downloader — CLI, Python API, and local web UI. Download reels, posts, and profile pictures with zero dependencies."
+description = "Lightweight Python Instagram video downloader for public reels, posts, carousels, and profile pictures. Includes a CLI, Python package API, local HTTP API, and web UI."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
     { name = "Saksham Pathak (Parthmax)", email = "pathaksaksham430@gmail.com" },
 ]
 keywords = [
-    "instagram-downloader", "instagram-reels", "reels-downloader", "insta-downloader",
-    "instagram-cli", "python-cli", "parth-dl", "parthmax", "saksham-pathak",
-    "media-downloader", "instagram-scraper", "reels-scraper", "developer-tools",
-    "open-source-cli", "fast-instagram-downloader",
+    "instagram-downloader", "instagram-video-downloader", "instagram-reels",
+    "reels-downloader", "insta-downloader", "instagram-cli", "python-cli",
+    "python-instagram-downloader", "zero-dependency", "parth-dl", "parthmax",
+    "saksham-pathak", "media-downloader", "developer-tools", "open-source-cli",
+    "fast-instagram-downloader",
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -25,7 +26,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -68,13 +68,13 @@ addopts = "-q"
 
 [tool.ruff]
 line-length = 120
-target-version = "py38"
+target-version = "py39"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = [
     "B904",  # raise ... from err - the chained context is noise in CLI error paths
-    "UP031", # %-format - not used, but keeps 3.8 compat rewrites off
+    "UP031", # %-format - keep CLI formatting stable
 ]
 
 [tool.ruff.lint.per-file-ignores]
