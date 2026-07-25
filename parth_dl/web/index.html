@@ -4,19 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<title>parth-dl — Instagram Reels, Posts &amp; Profile Picture Downloader (Python CLI)</title>
-<meta name="description" content="parth-dl is a fast, zero-dependency Instagram downloader for reels, posts, carousels and profile pictures. Use it as a Python CLI, a Python library, or a local JSON API. Open source, MIT licensed, built by Saksham Pathak (Parthmax).">
+<title>parth-dl — Lightweight Python Instagram Video Downloader</title>
+<meta name="description" content="parth-dl is a lightweight Python Instagram video downloader for public reels, posts, carousels and profile pictures. Install with pip, use the CLI, Python package API, local HTTP API, or web UI.">
 <meta name="author" content="Saksham Pathak">
 <link rel="canonical" href="https://parthmax2.github.io/parth-dl/">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="parth-dl">
-<meta property="og:title" content="parth-dl — Instagram Downloader CLI, Library &amp; Web UI">
-<meta property="og:description" content="Download Instagram reels, posts and profile pictures from your terminal, your Python code, or any app over HTTP. Zero dependencies, MIT licensed.">
+<meta property="og:title" content="parth-dl — Lightweight Python Instagram Video Downloader">
+<meta property="og:description" content="A zero-dependency Instagram downloader CLI, Python package, local HTTP API and web UI for public reels, posts, carousels and profile pictures.">
 <meta property="og:url" content="https://parthmax2.github.io/parth-dl/">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="parth-dl — Instagram Downloader CLI, Library &amp; Web UI">
-<meta name="twitter:description" content="Download Instagram reels, posts and profile pictures from your terminal, your Python code, or any app over HTTP.">
+<meta name="twitter:title" content="parth-dl — Lightweight Python Instagram Video Downloader">
+<meta name="twitter:description" content="Install with pip and download public Instagram reels, posts, carousels and profile pictures from a CLI, Python API, local HTTP API or web UI.">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
 
@@ -29,7 +29,7 @@
       "name": "parth-dl",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Windows, macOS, Linux",
-      "description": "A fast, zero-dependency Instagram media downloader for reels, posts, carousels and profile pictures. Available as a command-line tool, a Python library, and a local HTTP JSON API.",
+      "description": "A lightweight zero-dependency Python Instagram video downloader for public reels, posts, carousels and profile pictures. Available as a command-line tool, Python package API, local HTTP JSON API, and web UI.",
       "url": "https://parthmax2.github.io/parth-dl/",
       "downloadUrl": "https://pypi.org/project/parth-dl/",
       "codeRepository": "https://github.com/parthmax2/parth-dl",
@@ -105,13 +105,34 @@
   nav a:hover { color: var(--accent); }
 
   /* ---- hero ---- */
-  .hero { padding: 40px 0 28px; }
-  h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.15; margin: 0 0 14px; letter-spacing: -0.02em; }
+  .hero { padding: 38px 0 30px; }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 420px); gap: 28px; align-items: center; }
+  .eyebrow { color: var(--accent); font-family: var(--mono); font-size: 13px; margin: 0 0 10px; }
+  h1 { font-size: clamp(34px, 6vw, 58px); line-height: 1.05; margin: 0 0 14px; letter-spacing: -0.02em; }
   h1 .grad {
     background: linear-gradient(100deg, var(--accent), var(--violet));
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
   .lede { color: var(--muted); font-size: 18px; max-width: 620px; margin: 0; }
+  .hero-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 22px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; min-height: 42px;
+    border-radius: 10px; padding: 0 16px; text-decoration: none; font-weight: 650;
+  }
+  .btn.primary { background: var(--accent); color: #04150f; }
+  .btn.secondary { color: var(--text); border: 1px solid var(--line); background: var(--panel); }
+  .btn:hover { filter: brightness(1.1); }
+  .install-card {
+    margin-top: 18px; border: 1px solid #00e5a044; background: var(--accent-dim);
+    border-radius: 12px; padding: 12px 14px; max-width: 440px;
+  }
+  .install-card span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .install-card code { color: var(--accent); font-family: var(--mono); font-size: 15px; }
+  .demo-shot {
+    display: block; width: 100%; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--panel); box-shadow: 0 24px 60px #0008;
+  }
+  .hero-note { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
   .pills { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
   .pill {
     font-family: var(--mono); font-size: 12px; color: var(--muted);
@@ -212,6 +233,10 @@
   footer a { color: var(--text); text-decoration: none; }
   footer a:hover { color: var(--accent); }
   .disclaimer { font-size: 13px; margin-top: 14px; }
+  @media (max-width: 760px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    nav { margin-left: 0; }
+  }
 
   /* ---- mode switching ---- */
   [data-mode="loading"] .live-only, [data-mode="loading"] .landing-only { display: none; }
@@ -234,16 +259,32 @@
 
 <main>
 <section class="hero">
-  <h1>Download Instagram media<br><span class="grad">from anywhere you build.</span></h1>
-  <p class="lede">
-    Reels, posts, carousels and profile pictures — through a terminal, a Python import,
-    or an HTTP call from any language. Zero dependencies, public content only.
-  </p>
-  <div class="pills">
-    <span class="pill">zero dependencies</span>
-    <span class="pill">resumable</span>
-    <span class="pill">MIT</span>
-    <span class="pill">python 3.9+</span>
+  <div class="hero-grid">
+    <div>
+      <p class="eyebrow">pip install parth-dl</p>
+      <h1>Lightweight Python<br><span class="grad">Instagram video downloader.</span></h1>
+      <p class="lede">
+        Download public Instagram reels, posts, carousels and profile pictures from a
+        clean CLI, Python package API, local HTTP API, or browser UI.
+      </p>
+      <div class="hero-actions">
+        <a class="btn primary" href="https://pypi.org/project/parth-dl/">View on PyPI</a>
+        <a class="btn secondary" href="https://github.com/parthmax2/parth-dl">GitHub</a>
+        <a class="btn secondary" href="https://github.com/parthmax2/parth-dl/tree/main/docs">Docs</a>
+      </div>
+      <div class="install-card">
+        <span>Install the CLI and package</span>
+        <code>pip install parth-dl</code>
+      </div>
+      <p class="hero-note">Public content only. No login, cookies, tokens, or browser session required.</p>
+      <div class="pills">
+        <span class="pill">zero dependencies</span>
+        <span class="pill">resumable</span>
+        <span class="pill">MIT</span>
+        <span class="pill">python 3.9+</span>
+      </div>
+    </div>
+    <img class="demo-shot" src="cli.gif" alt="parth-dl CLI demo showing progress bar and saved Instagram reel file">
   </div>
 </section>
 

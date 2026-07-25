@@ -60,7 +60,7 @@ version = { attr = "parth_dl.__version__" }
 include = ["parth_dl*"]
 
 [tool.setuptools.package-data]
-parth_dl = ["web/*.html"]
+parth_dl = ["web/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
