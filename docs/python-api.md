@@ -99,6 +99,7 @@ downloader = InstagramDownloader(
     rate_limit=True,
     quiet=True,
     overwrite=False,
+    caption_max_length=None,  # full caption in title + caption field
 )
 
 urls = [

@@ -418,6 +418,21 @@ def select_format(formats, quality='best'):
     return chooser(formats, key=area)
 
 
+def format_caption(text, max_length=100):
+    """
+    Format caption text for display.
+
+    Args:
+        text: Raw caption string from Instagram
+        max_length: Trim to this many characters; None keeps the full caption
+    """
+    if not text:
+        return ''
+    if max_length is None:
+        return text
+    return text[:max_length]
+
+
 def finalize_info(info):
     """
     Populate the legacy top-level `formats` / `images` keys from `entries`,

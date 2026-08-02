@@ -12,6 +12,7 @@ from parth_dl.utils import (
     extract_username,
     file_uri,
     finalize_info,
+    format_caption,
     guess_extension,
     hyperlink,
     is_media_url,
@@ -95,6 +96,20 @@ class TestUrlParsing(unittest.TestCase):
                 request, None, 302, 'Found', {},
                 'http://127.0.0.1/private',
             )
+
+
+class TestFormatCaption(unittest.TestCase):
+
+    def test_default_trim(self):
+        self.assertEqual(format_caption('hello world', 5), 'hello')
+
+    def test_unlimited(self):
+        text = 'a' * 200
+        self.assertEqual(format_caption(text, None), text)
+
+    def test_empty(self):
+        self.assertEqual(format_caption('', 100), '')
+        self.assertEqual(format_caption(None, 100), '')
 
 
 class TestFilenames(unittest.TestCase):

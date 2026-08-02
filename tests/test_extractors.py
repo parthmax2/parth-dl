@@ -129,6 +129,7 @@ class ParseApiItemTest(unittest.TestCase):
         self.assertEqual(info['uploader'], 'parthmax_')
         self.assertEqual(info['type'], 'video')
         self.assertEqual(info['title'], 'sunrise over lucknow')
+        self.assertEqual(info['caption'], 'sunrise over lucknow')
         self.assertEqual(info['thumbnail'], 'https://cdn/thumb.jpg')
 
         self.assertEqual(len(info['entries']), 1)
@@ -151,6 +152,26 @@ class ParseApiItemTest(unittest.TestCase):
         info = self.extractor._parse_media_item(item)
 
         self.assertEqual(info['title'], 'Media by parthmax_')
+        self.assertEqual(info['caption'], '')
+
+    def test_long_caption_is_trimmed_in_title_by_default(self):
+        item = api_video_item()
+        item['caption'] = {'text': 'x' * 150}
+
+        info = self.extractor._parse_media_item(item)
+
+        self.assertEqual(len(info['title']), 100)
+        self.assertEqual(len(info['caption']), 150)
+
+    def test_unlimited_caption_length(self):
+        item = api_video_item()
+        item['caption'] = {'text': 'x' * 150}
+        extractor = MediaExtractor(caption_max_length=None)
+
+        info = extractor._parse_media_item(item)
+
+        self.assertEqual(len(info['title']), 150)
+        self.assertEqual(info['caption'], 'x' * 150)
 
     def test_legacy_keys_are_populated(self):
         # Callers written against the pre-entries API still read info['formats']

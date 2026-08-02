@@ -78,7 +78,7 @@ class InstagramDownloader:
     CHUNK_SIZE = 65536
 
     def __init__(self, verbose=False, rate_limit=True, quiet=False, overwrite=False,
-                 progress_hook=None, rate_limiter=None):
+                 progress_hook=None, rate_limiter=None, caption_max_length=100):
         """
         Initialize downloader
 
@@ -90,11 +90,14 @@ class InstagramDownloader:
             progress_hook: Optional callable(downloaded_bytes, total_bytes) invoked
                 as the transfer advances. Used by the web UI to report progress;
                 `total_bytes` is 0 when the server sends no Content-Length.
+            caption_max_length: Trim captions to this length for `title`; None keeps
+                the full caption (also exposed as `caption` in metadata).
         """
         self.verbose = verbose
         self.quiet = quiet
         self.overwrite = overwrite
         self.progress_hook = progress_hook
+        self.caption_max_length = caption_max_length
         self.progress_item_index = 1
         self.progress_item_count = 1
         self.last_skipped_files = []
@@ -108,7 +111,9 @@ class InstagramDownloader:
 
         # Initialize extractors
         self.media_extractor = MediaExtractor(
-            verbose=verbose, rate_limiter=self.rate_limiter,
+            verbose=verbose,
+            rate_limiter=self.rate_limiter,
+            caption_max_length=caption_max_length,
         )
         self.profile_extractor = ProfilePictureExtractor(
             verbose=verbose, rate_limiter=self.rate_limiter,

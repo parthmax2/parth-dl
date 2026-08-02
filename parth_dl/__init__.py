@@ -24,7 +24,7 @@ __all__ = [
 ]
 
 
-def download(url, output_path=None, quality='best', verbose=False):
+def download(url, output_path=None, quality='best', verbose=False, caption_max_length=100):
     """
     Download media from an Instagram URL.
 
@@ -33,6 +33,8 @@ def download(url, output_path=None, quality='best', verbose=False):
         output_path: Output file path, or a directory to write into
         quality: 'best' or 'worst'
         verbose: Enable verbose logging
+        caption_max_length: Trim captions to this length for `title`; None keeps
+            the full caption (also exposed as `caption` in metadata).
 
     Returns:
         A path (single item) or list of paths (carousel) to the downloaded file(s)
@@ -43,17 +45,19 @@ def download(url, output_path=None, quality='best', verbose=False):
         NetworkError: the transfer failed after retries
         DownloadError: the content is private, deleted, or unsupported
     """
-    downloader = InstagramDownloader(verbose=verbose)
+    downloader = InstagramDownloader(verbose=verbose, caption_max_length=caption_max_length)
     return downloader.download(url, output_path, quality)
 
 
-def get_info(url, verbose=False):
+def get_info(url, verbose=False, caption_max_length=100):
     """
     Fetch media metadata without downloading anything.
 
     Args:
         url: Instagram URL (reel, post, or profile)
         verbose: Enable verbose logging
+        caption_max_length: Trim captions to this length for `title`; None keeps
+            the full caption (also exposed as `caption` in metadata).
 
     Returns:
         A metadata dict - see docs/schema.md for the full field reference.
@@ -61,5 +65,5 @@ def get_info(url, verbose=False):
     Raises:
         Same as download().
     """
-    downloader = InstagramDownloader(verbose=verbose)
+    downloader = InstagramDownloader(verbose=verbose, caption_max_length=caption_max_length)
     return downloader.get_info(url)
