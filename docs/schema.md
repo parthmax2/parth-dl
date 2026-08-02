@@ -9,7 +9,8 @@ on top of the package, this is the page to read.
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | The shortcode (`Cxyz123AbCd`) for a post or reel; the **username** for a profile picture. |
-| `title` | string | First 100 characters of the caption. Falls back to `"Media by <uploader>"` when there is no caption. |
+| `title` | string | Caption text trimmed for display. Defaults to the first 100 characters; set `caption_max_length=None` on `InstagramDownloader` / `get_info()` for the full caption. Falls back to `"Media by <uploader>"` when there is no caption. |
+| `caption` | string | Full Instagram caption text when present; empty string otherwise. Always untrimmed. |
 | `uploader` | string | Username, without the `@`. `"unknown"` if it could not be determined. |
 | `type` | string | One of `video`, `image`, `carousel`, `profile_picture`. |
 | `duration` | number \| null | Video length in seconds. `null` for images and often for GraphQL results. |
@@ -51,6 +52,7 @@ sorts by pixel area and copes with the `null` dimensions.
 {
   "id": "Cxyz123AbCd",
   "title": "sunrise over lucknow",
+  "caption": "sunrise over lucknow",
   "uploader": "parthmax",
   "type": "video",
   "duration": 12.5,

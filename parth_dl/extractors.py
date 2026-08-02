@@ -17,6 +17,7 @@ from .utils import (
     extract_instagram_id,
     extract_username,
     finalize_info,
+    format_caption,
     retry_on_failure,
 )
 
@@ -154,6 +155,19 @@ class MediaExtractor(BaseExtractor):
     API_BASE = 'https://i.instagram.com/api/v1'
     LOGGED_OUT_QUERY_NAME = 'PolarisLoggedOutDesktopWWWPostRootContentQuery'
     LOGGED_OUT_QUERY_DOC_ID = '27130156389949648'
+
+    def __init__(self, verbose=False, rate_limiter=None, caption_max_length=100):
+        super().__init__(verbose=verbose, rate_limiter=rate_limiter)
+        self.caption_max_length = caption_max_length
+
+    def _caption_fields(self, caption_text, uploader):
+        """Build title/caption metadata from raw Instagram caption text."""
+        caption = caption_text or ''
+        title = format_caption(caption, self.caption_max_length)
+        return {
+            'caption': caption,
+            'title': title or f"Media by {uploader}",
+        }
 
     def extract(self, url):
         """
@@ -492,11 +506,11 @@ class MediaExtractor(BaseExtractor):
         uploader = item.get('user', {}).get('username', 'unknown')
 
         caption = item.get('caption') or {}
-        title = caption.get('text', '')[:100] if isinstance(caption, dict) else ''
+        caption_text = caption.get('text', '') if isinstance(caption, dict) else ''
 
         result = {
             'id': item.get('code') or self._mediaid_to_shortcode(item.get('pk', '')) or 'unknown',
-            'title': title or f"Media by {uploader}",
+            **self._caption_fields(caption_text, uploader),
             'entries': [],
             'thumbnail': None,
             'duration': item.get('video_duration'),
@@ -564,11 +578,11 @@ class MediaExtractor(BaseExtractor):
         uploader = media.get('owner', {}).get('username', 'unknown')
 
         edges = media.get('edge_media_to_caption', {}).get('edges') or []
-        title = edges[0].get('node', {}).get('text', '')[:100] if edges else ''
+        caption_text = edges[0].get('node', {}).get('text', '') if edges else ''
 
         result = {
             'id': media.get('shortcode', '') or 'unknown',
-            'title': title or f"Media by {uploader}",
+            **self._caption_fields(caption_text, uploader),
             'entries': [],
             'thumbnail': media.get('display_url') or media.get('thumbnail_src'),
             'duration': media.get('video_duration'),
